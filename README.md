@@ -13,8 +13,7 @@ Agents and the UI are independent clients of the same remote.
 | `packages/server` | `@kanbanly/server` — OSS HTTP API, SSE, push queue, multi-remote registry |
 | `apps/web` | React board UI (built into `packages/server/public`) |
 | `apps/start` | TanStack Start board (optional docs stack) |
-| `kanbanly-saas/` | Closed SaaS (S3, device auth, AI confirm-before-write, export) |
-| `fixtures/` | Layout-A sample boards |
+| `kanbanly-saas` | Closed SaaS (private repo: [billiondollarsolo/kanbanly-saas](https://github.com/billiondollarsolo/kanbanly-saas)) || `fixtures/` | Layout-A sample boards |
 | `docs/specs/` | Product specification |
 | `bin/kanbanly` | Cross-runtime CLI entry (Bun preferred, Node 22+ fallback) |
 
