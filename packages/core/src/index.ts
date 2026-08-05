@@ -333,3 +333,11 @@ export {
   type AiToolDefinition,
   type ToolKind,
 } from "./ai-tools.ts";
+
+export {
+  parseGitHubRemote,
+  commitSubject,
+  watchGitHubCommits,
+  type GitHubRepoRef,
+  type WatchCommitsResult,
+} from "./code-watch.ts";

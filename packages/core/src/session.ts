@@ -93,6 +93,11 @@ export function applySessionEnd(input: SessionEndInput): SessionEndResult {
       updated: nowIso(),
     },
     status,
+    // session-end never touches the checklist — carry the parsed items AND the
+    // verbatim section through, or serialization would rewrite (and flatten) a
+    // checklist this call never looked at.
+    checklist: input.card.checklist ?? [],
+    checklistRaw: input.card.checklistRaw,
     log,
   };
   return {

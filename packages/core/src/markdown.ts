@@ -1,7 +1,7 @@
 /**
  * Minimal Markdown → safe HTML for Status / Log panels.
- * Supports: paragraphs, soft breaks, **bold**, *italic*, `code`,
- * [links](url), unordered/ordered lists, fenced code blocks.
+ * Supports: headings (#..###), paragraphs, soft breaks, **bold**, *italic*,
+ * `code`, [links](url), unordered/ordered lists, fenced code blocks.
  * Escapes all HTML first — never injects raw user HTML.
  */
 
@@ -55,6 +55,18 @@ export function renderMarkdown(md: string | undefined | null): string {
       continue;
     }
 
+    // ATX heading (#, ##, ###) — levels are offset by one so a card body can
+    // never emit an <h1> that competes with the page heading.
+    const heading = line.match(/^(#{1,3})\s+(.*)$/);
+    if (heading) {
+      const level = Math.min(6, heading[1]!.length + 1);
+      out.push(
+        `<h${level}>${inlineMarkdown(escapeHtml(heading[2]!.trim()))}</h${level}>`,
+      );
+      i += 1;
+      continue;
+    }
+
     // unordered list
     if (/^\s*[-*+]\s+/.test(line)) {
       const items: string[] = [];
@@ -91,6 +103,7 @@ export function renderMarkdown(md: string | undefined | null): string {
       // stop if next structural
       if (
         lines[i]!.trimStart().startsWith("```") ||
+        /^#{1,3}\s+/.test(lines[i]!) ||
         /^\s*[-*+]\s+/.test(lines[i]!) ||
         /^\s*\d+\.\s+/.test(lines[i]!)
       ) {

@@ -40,6 +40,9 @@ export class LiveHub {
   private running = false;
   readonly intervalMs: number;
   private fetchRemote: boolean;
+  private lastFetchError = "";
+  /** Most recent fetch error, exposed so /api/refresh can report it. */
+  lastFetchErrorPublic = "";
   private connected?: ConnectedRepo;
   private indexStore: BoardIndexStore;
   /** Test counter: how many poll ticks ran. */
@@ -113,7 +116,15 @@ export class LiveHub {
     }
 
     if (this.fetchRemote) {
-      await tryFetchOrigin(this.connected.storage);
+      const f = await tryFetchOrigin(this.connected.storage);
+      // Surface it once rather than looping silently on a bad credential.
+      if (f.error && f.error !== this.lastFetchError) {
+        this.lastFetchError = f.error;
+        console.warn(`[kanbanly] remote fetch failed: ${f.error}`);
+      } else if (!f.error) {
+        this.lastFetchError = "";
+      }
+      this.lastFetchErrorPublic = f.error ?? "";
     }
 
     const sha = this.connected.storage.headSha();
@@ -218,23 +229,22 @@ export function formatSse(event: LiveEvent): string {
   return `event: board\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
-async function tryFetchOrigin(storage: GitStorage): Promise<void> {
-  const remotes = storage.git(["remote"]);
-  if (!remotes.ok || !remotes.stdout.includes("origin")) return;
-  // Best-effort fetch; failures are non-fatal (offline / no network)
-  storage.git(["fetch", "origin", "--prune"]);
-  // Fast-forward local branch if possible
-  const branch = storage.git(["rev-parse", "--abbrev-ref", "HEAD"]);
-  if (branch.ok) {
-    const name = branch.stdout.trim();
-    if (name && name !== "HEAD") {
-      storage.git(["merge", "--ff-only", `origin/${name}`]);
-    }
-  }
+async function tryFetchOrigin(storage: GitStorage): Promise<{ error?: string }> {
+  // Authenticated: a bare `git fetch` on a private repo fails with
+  // "could not read Username" and, being swallowed as "offline", made the
+  // poller silently never pull anyone else's commits.
+  const r = storage.fetchAndFastForward();
   // FR-7: heal any conflict-markered card files left in the working tree
   try {
     await storage.healWorkingTree();
   } catch {
     /* non-fatal */
   }
+  if (!r.ok) return { error: r.error };
+  if (r.diverged) {
+    return {
+      error: `local branch has diverged from origin (${r.ahead} ahead, ${r.behind} behind) — cannot fast-forward`,
+    };
+  }
+  return {};
 }

@@ -5,33 +5,39 @@
 html[data-theme="dark"] {
   color-scheme: dark;
   /* color */
-  --bg: #0c0e10;
-  --panel: #121518;
-  --card: #16191d;
-  --card-hover: #1a1e23;
-  --border: #262b30;
-  --line: #262b30;
-  --line2: #1c2125;
-  --text: #e5e8ea;
-  --fg: #e5e8ea;
-  --muted: #98a0a6;
-  --fg2: #98a0a6;
-  --fg3: #6a7177;
+  --bg: #000000;
+  --panel: #0a0a0b;
+  --card: #101112;
+  --card-hover: #16171a;
+  --border: #1d1e21;
+  --line: #1d1e21;
+  --line2: #161719;
+  --text: #f2f3f4;
+  --fg: #f2f3f4;
+  --muted: #9a9ea5;
+  --fg2: #9a9ea5;
+  --fg3: #6c7076;
+  /* brand accent — focus rings and links only; actives invert to --fg */
   --accent: #8fb4dd;
   --drop: #5f9c4f;
   --danger: #c0563e;
-  --navbar: #121518;
-  --navbar-text: #e5e8ea;
-  --navbar-muted: #6a7177;
-  --navbar-border: #262b30;
-  --toolbar: #121518;
-  --input: #0f1215;
-  --grid: rgba(255, 255, 255, 0.035);
-  --elev: 0 1px 0 rgba(0, 0, 0, 0.4);
+  /* priority hues — identical in both themes, per the design palette */
+  --prio-red: #c0563e;
+  --prio-amber: #c08a2e;
+  --prio-slate: #77808a;
+  --navbar: #0a0a0b;
+  --navbar-text: #f2f3f4;
+  --navbar-muted: #6c7076;
+  --navbar-border: #1d1e21;
+  --toolbar: #0a0a0b;
+  --input: #0a0a0b;
+  --grid: rgba(255, 255, 255, 0.02);
+  --elev: 0 1px 2px rgba(0, 0, 0, 0.6);
   --shadow-card: var(--elev);
-  --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.5);
   --shadow-list: var(--elev);
-  --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.2);
+  --shadow-menu: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-modal: 0 24px 60px rgba(0, 0, 0, 0.6);
   /* space scale (px) — match mock: 2/4/6/8/10/12/14/16/20/24/32 */
   --s-1: 2px;
   --s-2: 4px;
@@ -44,21 +50,30 @@ html[data-theme="dark"] {
   --s-9: 20px;
   --s-10: 24px;
   --s-11: 32px;
-  --control-h: 32px;
+  --control-h: 34px;
   --header-pad-y: 12px;
   --header-pad-x: 16px;
-  --col-w: 320px;
-  --radius: 0;
+  /* Design spec is 288px; widened for kanbanly's longer titles and card ids. */
+  --col-w: 336px;
+  /* radius scale — chips / controls / cards / containers / modal */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 14px;
+  --r-menu: 10px;
+  --r-pill: 999px;
+  --radius: var(--r-sm);
   --font: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   /* Comfortable dense type scale (min ~11–12px; body 14px) */
-  --fs-mono-xs: 11px; /* uppercase section / field labels */
-  --fs-mono-sm: 12px; /* buttons, meta, chips */
-  --fs-mono: 12px; /* column titles, mono chrome */
-  --fs-body: 14px; /* forms, nav, primary UI */
-  --fs-body-lg: 15px; /* card titles */
-  --fs-title: 16px; /* board name, settings titles */
-  --fs-badge: 11px; /* counts, tiny IDs only */
+  --fs-mono-xs: 12px; /* uppercase section / field labels */
+  --fs-mono-sm: 12.5px; /* buttons, meta, chips */
+  --fs-mono: 13px; /* mono chrome (add card / add column) */
+  --fs-body: 15px; /* forms, nav, primary UI */
+  --fs-body-lg: 15.5px; /* card titles */
+  --fs-title: 17px; /* board name, settings titles */
+  --fs-badge: 11.5px; /* label chips */
   --ls-label: 0.1em;
   --ls-caps: 0.12em;
   font-family: var(--font);
@@ -67,33 +82,34 @@ html[data-theme="dark"] {
 
 html[data-theme="light"] {
   color-scheme: light;
-  --bg: #f3f3f1;
-  --panel: #fafaf9;
+  --bg: #f7f7f8;
+  --panel: #ffffff;
   --card: #ffffff;
-  --card-hover: #f7f7f5;
-  --border: #d9d9d4;
-  --line: #d9d9d4;
-  --line2: #e9e9e5;
-  --text: #15171a;
-  --fg: #15171a;
-  --muted: #5b6167;
-  --fg2: #5b6167;
-  --fg3: #8d9399;
+  --card-hover: #fafafb;
+  --border: #e6e6e8;
+  --line: #e6e6e8;
+  --line2: #efeff1;
+  --text: #0f1011;
+  --fg: #0f1011;
+  --muted: #5c6066;
+  --fg2: #5c6066;
+  --fg3: #8b9096;
   --accent: #4a7dbd;
   --drop: #5f9c4f;
   --danger: #c0563e;
-  --navbar: #fafaf9;
-  --navbar-text: #15171a;
-  --navbar-muted: #8d9399;
-  --navbar-border: #d9d9d4;
-  --toolbar: #fafaf9;
+  --navbar: #ffffff;
+  --navbar-text: #0f1011;
+  --navbar-muted: #8b9096;
+  --navbar-border: #e6e6e8;
+  --toolbar: #ffffff;
   --input: #ffffff;
-  --grid: rgba(0, 0, 0, 0.045);
-  --elev: 0 1px 0 rgba(0, 0, 0, 0.05);
+  --grid: rgba(0, 0, 0, 0.03);
+  --elev: 0 1px 2px rgba(16, 17, 19, 0.06);
   --shadow-card: var(--elev);
-  --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --shadow-card-hover: 0 8px 24px rgba(16, 17, 19, 0.12);
   --shadow-list: var(--elev);
-  --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --shadow-menu: 0 12px 32px rgba(16, 17, 19, 0.14);
+  --shadow-modal: 0 24px 60px rgba(16, 17, 19, 0.22);
 }
 
 * {
@@ -128,10 +144,6 @@ body {
   margin: 0;
   padding: 0;
   background-color: var(--bg);
-  background-image:
-    linear-gradient(var(--grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-  background-size: 32px 32px;
 }
 
 /* ——— Top bar (design: sticky panel header) ——— */
@@ -198,7 +210,7 @@ body {
 
 .kb-wordmark {
   font-family: var(--mono);
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -242,6 +254,7 @@ body {
   height: var(--control-h);
   padding: 0 var(--s-4);
   border: 1px solid var(--line);
+  border-radius: var(--r-sm);
   background: var(--input);
   color: var(--fg);
   cursor: pointer;
@@ -263,17 +276,18 @@ body {
 }
 
 .kb-board-picker-title {
-  font-size: var(--fs-title);
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: -0.01em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
+  /* keep a readable stub when the toolbar squeezes — "ba…" is not a board name */
+  min-width: 7ch;
 }
 
 .kb-board-picker-caret {
-  font-size: var(--fs-badge);
+  font-size: 11px;
   color: var(--fg3);
   flex: 0 0 auto;
 }
@@ -282,7 +296,7 @@ body {
   flex: 0 0 auto;
   white-space: nowrap;
   font-family: var(--mono);
-  font-size: var(--fs-badge);
+  font-size: 13px;
   line-height: 1.4;
   color: var(--fg3);
   border: 1px solid var(--line);
@@ -296,6 +310,7 @@ body {
   z-index: 40;
   width: 248px;
   border: 1px solid var(--line);
+  border-radius: var(--r-menu);
   background: var(--panel);
   box-shadow: var(--shadow-menu);
   padding: var(--s-4);
@@ -465,7 +480,7 @@ body {
   display: inline-flex;
   align-items: stretch;
   padding: 0;
-  border-radius: 0;
+  border-radius: var(--r-sm);
   background: var(--input);
   border: 1px solid var(--line);
   overflow: hidden;
@@ -483,7 +498,7 @@ body {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   padding: 0 10px;
-  height: 30px;
+  height: 34px;
   cursor: pointer;
   line-height: 1;
 }
@@ -498,16 +513,12 @@ body {
   box-shadow: none;
 }
 
-html[data-theme="dark"] .kb-theme-switch button[aria-pressed="true"] {
-  color: #0c0e10;
-}
-
 .kb-toolbar-btn {
   appearance: none;
   background: var(--input);
   border: 1px solid var(--line);
   color: var(--fg2);
-  border-radius: var(--radius);
+  border-radius: var(--r-sm);
   padding: 0 var(--s-5);
   height: var(--control-h);
   font-family: var(--mono);
@@ -606,33 +617,37 @@ html[data-theme="dark"] .kb-theme-switch button[aria-pressed="true"] {
 }
 
 /* Sidebar + content shell */
+/* Design: one centered 1000px column — a 172px sticky nav beside the content,
+   not a full-bleed rail. */
 .kb-settings-shell {
   flex: 1;
   min-height: 0;
-  display: flex;
-  align-items: stretch;
+  display: grid;
+  grid-template-columns: 172px 1fr;
+  gap: 36px;
+  align-items: start;
   width: 100%;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 28px 20px 64px;
+  overflow-y: auto;
+  box-sizing: border-box;
   background-color: var(--bg);
-  background-image:
-    linear-gradient(var(--grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-  background-size: 32px 32px;
 }
 
 .kb-settings-nav {
-  flex: 0 0 200px;
-  width: 200px;
-  border-right: 1px solid var(--line);
-  background: var(--panel);
-  padding: var(--s-6) var(--s-4);
+  position: sticky;
+  top: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--s-1);
-  overflow-y: auto;
+  gap: 2px;
+  min-width: 0;
   box-sizing: border-box;
 }
 
+/* The design's settings nav is bare items; <nav aria-label> already names it. */
 .kb-settings-nav-label {
+  display: none;
   font-family: var(--mono);
   font-size: var(--fs-mono-xs);
   letter-spacing: var(--ls-caps);
@@ -649,11 +664,11 @@ html[data-theme="dark"] .kb-theme-switch button[aria-pressed="true"] {
   background: transparent;
   color: var(--fg2);
   font: inherit;
-  font-size: var(--fs-body);
-  font-weight: 500;
-  padding: 8px var(--s-4);
+  font-size: 15px;
+  font-weight: 400;
+  padding: 7px 10px;
   cursor: pointer;
-  border-radius: var(--radius);
+  border-radius: var(--r-sm);
   line-height: 1.3;
 }
 
@@ -663,23 +678,22 @@ html[data-theme="dark"] .kb-theme-switch button[aria-pressed="true"] {
 }
 
 .kb-settings-nav-item.is-active {
-  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  background: var(--line2);
   color: var(--fg);
-  box-shadow: inset 2px 0 0 var(--fg);
+  font-weight: 600;
 }
 
 .kb-settings-main {
-  flex: 1;
   min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--s-9) var(--s-9) var(--s-11);
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+  padding: 0;
   box-sizing: border-box;
 }
 
 .kb-settings-main > .kb-settings-section {
   width: 100%;
-  max-width: 720px;
 }
 
 /* legacy alias if any */
@@ -859,7 +873,7 @@ html[data-theme="dark"] .kb-theme-switch button[aria-pressed="true"] {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   padding: 0 12px;
-  height: 30px;
+  height: 34px;
   cursor: pointer;
 }
 
@@ -1035,7 +1049,7 @@ html[data-theme="dark"] .kb-theme-switch button[aria-pressed="true"] {
   font-family: var(--mono);
   font-size: var(--fs-mono-sm);
   padding: 0 var(--s-3);
-  border-radius: var(--radius);
+  border-radius: var(--r-sm);
   border: 1px solid var(--line);
   color: var(--fg3);
   background: var(--input);
@@ -1066,9 +1080,9 @@ html[data-theme="dark"] .kb-theme-switch button[aria-pressed="true"] {
   background: transparent;
   border: 1px solid var(--danger);
   color: var(--danger);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 0 8px;
-  height: 30px;
+  height: 34px;
   font-family: var(--mono);
   font-size: var(--fs-mono-sm);
   letter-spacing: 0.08em;
@@ -1081,7 +1095,7 @@ html[data-theme="dark"] .kb-theme-switch button[aria-pressed="true"] {
   background: color-mix(in srgb, var(--danger) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
   padding: var(--s-5) var(--s-6);
-  border-radius: var(--radius);
+  border-radius: var(--r-md);
   margin: 0 0 var(--s-6);
   font-size: var(--fs-body);
   line-height: 1.45;
@@ -1099,7 +1113,7 @@ html[data-theme="dark"] .kb-theme-switch button[aria-pressed="true"] {
   background: var(--input);
   border: 1px solid var(--line);
   color: var(--text);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 7px 9px;
   font: inherit;
   box-shadow: none;
@@ -1114,7 +1128,7 @@ html[data-theme="dark"] .kb-theme-switch button[aria-pressed="true"] {
   background: var(--fg);
   color: var(--bg);
   border: 1px solid var(--fg);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 0 12px;
   font-family: var(--mono);
   font-size: var(--fs-mono-sm);
@@ -1141,7 +1155,7 @@ html[data-theme="dark"] .kb-theme-switch button[aria-pressed="true"] {
   background: var(--input);
   border: 1px solid var(--line);
   color: var(--text);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 6px 8px;
   font: inherit;
   box-shadow: none;
@@ -1186,18 +1200,35 @@ html[data-theme="dark"] .kb-theme-switch button[aria-pressed="true"] {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 48px 16px 32px;
+  padding: 56px 20px;
   overflow-y: auto;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
   animation: kb-fade 0.12s ease-out;
 }
 
+/* 3px column-colour stripe across the top, tying the modal to its column. */
+.kb-card-modal-dialog--striped {
+  position: relative;
+  overflow: hidden;
+}
+
+.kb-card-modal-dialog--striped::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--col-accent, var(--line));
+}
+
 .kb-card-modal-dialog {
-  width: min(768px, 100%);
+  width: min(680px, 100%);
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-card-hover);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-modal);
   padding: var(--s-8) var(--s-9) var(--s-9);
   margin-bottom: 40px;
   animation: kb-pop 0.14s ease-out;
@@ -1232,7 +1263,7 @@ html[data-theme="dark"] .kb-theme-switch button[aria-pressed="true"] {
   box-sizing: border-box;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: var(--radius);
+  border-radius: var(--r-sm);
   color: var(--text);
   font-family: var(--font);
   font-size: 1.25rem;
@@ -1265,7 +1296,7 @@ html[data-theme="dark"] .kb-theme-switch button[aria-pressed="true"] {
   background: transparent;
   border: 1px solid var(--line);
   color: var(--fg2);
-  border-radius: var(--radius);
+  border-radius: var(--r-sm);
   width: 32px;
   height: 32px;
   padding: 0;
@@ -1315,50 +1346,81 @@ html[data-theme="dark"] .kb-theme-switch button[aria-pressed="true"] {
   background: var(--input);
   border: 1px solid var(--line);
   color: var(--text);
-  border-radius: var(--radius);
+  border-radius: var(--r-sm);
   padding: var(--s-6);
   resize: vertical;
 }
 
 /* Portfolio / projects home */
+/* Design: one centered 1100px reading column. */
 .kb-portfolio {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: var(--s-8) var(--s-9);
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 20px 64px;
+  box-sizing: border-box;
 }
 
 .kb-portfolio-head {
-  margin-bottom: var(--s-8);
+  margin-bottom: 26px;
+}
+
+.kb-portfolio-head-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-8);
+  margin-bottom: 6px;
 }
 
 .kb-portfolio-title {
-  margin: 0 0 var(--s-2);
-  font-size: var(--fs-title);
+  margin: 0;
+  font-size: 26px;
   font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.kb-portfolio-head-meta {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: var(--fs-mono-sm);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg3);
+}
+
+.kb-portfolio-head .kb-muted {
+  margin: 0;
+  font-size: 15px;
+  color: var(--fg2);
+  max-width: 52ch;
+  text-wrap: pretty;
 }
 
 .kb-portfolio-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: var(--s-6);
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--s-8);
   margin-bottom: var(--s-10);
 }
 
 .kb-portfolio-tile {
   text-align: left;
-  background: var(--panel);
+  background: var(--card);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: var(--s-6) var(--s-7);
+  border-radius: var(--r-lg);
+  padding: var(--s-8);
   cursor: pointer;
   color: inherit;
   font: inherit;
   box-shadow: var(--elev);
   display: flex;
   flex-direction: column;
-  gap: var(--s-4);
-  min-height: 140px;
+  gap: var(--s-7);
+  transition: border-color 0.12s ease;
 }
 
 .kb-portfolio-tile:hover {
@@ -1378,17 +1440,356 @@ html[data-theme="dark"] .kb-theme-switch button[aria-pressed="true"] {
 .kb-portfolio-tile-top {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
-  gap: var(--s-4);
+  align-items: flex-start;
+  gap: var(--s-5);
 }
 
+.kb-portfolio-ident {
+  min-width: 0;
+}
+
+.kb-portfolio-name {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.kb-portfolio-submeta {
+  font-family: var(--mono);
+  font-size: var(--fs-mono-sm);
+  color: var(--fg3);
+  margin-top: 3px;
+}
+
+/* Status pill */
 .kb-portfolio-health {
   font-family: var(--mono);
   font-size: var(--fs-badge);
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  flex-shrink: 0;
+  flex: 0 0 auto;
   color: var(--fg3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 3px 7px;
+  line-height: 1.2;
+}
+
+.kb-portfolio-health.is-attention {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+/* Completion — label + big percentage over a weighted column bar */
+.kb-portfolio-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--s-3);
+}
+
+.kb-portfolio-progress-label {
+  font-family: var(--mono);
+  font-size: var(--fs-mono-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg3);
+}
+
+.kb-portfolio-pct {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.kb-portfolio-segbar {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--line2);
+}
+
+.kb-portfolio-seg {
+  min-width: 0;
+}
+
+.kb-portfolio-colstats {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.kb-portfolio-colstat {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  font-size: 14px;
+}
+
+.kb-portfolio-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+
+.kb-portfolio-colname {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg2);
+}
+
+.kb-portfolio-colcount {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Footer — one divided block holding throughput, exceptions and actors */
+.kb-portfolio-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  padding-top: var(--s-6);
+  border-top: 1px solid var(--line2);
+}
+
+.kb-portfolio-foot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-5);
+}
+
+.kb-portfolio-lastline {
+  min-width: 0;
+  font-size: 13px;
+  color: var(--fg3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Only inset the activity line when an avatar actually precedes it. */
+.kb-portfolio-avatar + .kb-portfolio-lastline {
+  margin-left: var(--s-6);
+}
+
+.kb-portfolio-avatars {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+}
+
+.kb-portfolio-avatar {
+  width: 24px;
+  height: 24px;
+  margin-right: -5px;
+  border: 1px solid var(--card);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: #0c0e10;
+}
+
+.kb-portfolio-risk {
+  font-family: var(--mono);
+  font-size: var(--fs-mono-sm);
+  color: var(--fg3);
+  flex: 0 0 auto;
+}
+
+/* ——— Header alerts (bell + popover) ——— */
+
+.kb-alerts {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.kb-alerts-btn {
+  position: relative;
+  overflow: visible;
+}
+
+.kb-alerts-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: var(--r-pill);
+  background: var(--danger);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.kb-alerts-menu {
+  position: absolute;
+  top: calc(100% + var(--s-2));
+  right: 0;
+  z-index: 40;
+  width: 320px;
+  max-height: 60vh;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-menu);
+  background: var(--panel);
+  box-shadow: var(--shadow-menu);
+  padding: var(--s-5);
+  animation: kb-pop 0.12s ease-out;
+  text-align: left;
+}
+
+.kb-alerts-menu-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-5);
+  font-family: var(--mono);
+  font-size: var(--fs-mono-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg3);
+  padding: 0 var(--s-3) var(--s-4);
+}
+
+.kb-alerts-ackall {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--fg3);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.kb-alerts-ackall:hover {
+  color: var(--fg);
+}
+
+/* Acknowledged alerts stay listed but recede. */
+.kb-alerts-item.is-acked {
+  opacity: 0.45;
+}
+
+/* No unread alerts — bell drops back to ordinary icon weight. */
+.kb-alerts-btn.is-quiet {
+  color: var(--fg3);
+}
+
+.kb-alerts-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.kb-alerts-item {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  width: 100%;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: var(--s-3) var(--s-3);
+  cursor: pointer;
+}
+
+.kb-alerts-item:hover {
+  background: var(--line2);
+}
+
+.kb-alerts-board {
+  font-family: var(--mono);
+  font-size: var(--fs-mono-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg3);
+}
+
+.kb-alerts-msg {
+  font-size: 14.5px;
+  color: var(--fg);
+  line-height: 1.4;
+}
+
+/* ——— Collapsed activity log ——— */
+
+.kb-portfolio-activity {
+  margin-top: var(--s-10);
+  border-top: 1px solid var(--line2);
+  padding-top: var(--s-6);
+}
+
+.kb-portfolio-activity-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  cursor: pointer;
+  list-style: none;
+  font-family: var(--mono);
+  font-size: var(--fs-mono-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg3);
+  padding: var(--s-2) 0;
+}
+
+.kb-portfolio-activity-summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Disclosure caret, rotated by the open state */
+.kb-portfolio-activity-summary::before {
+  content: "›";
+  display: inline-block;
+  font-size: 15px;
+  line-height: 1;
+  transition: transform 0.12s ease;
+}
+
+.kb-portfolio-activity[open] .kb-portfolio-activity-summary::before {
+  transform: rotate(90deg);
+}
+
+.kb-portfolio-activity-summary:hover {
+  color: var(--fg);
+}
+
+.kb-portfolio-activity-count {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg3);
+  background: var(--line2);
+  border-radius: var(--r-pill);
+  padding: 1px 6px;
+  letter-spacing: 0;
+}
+
+.kb-portfolio-activity .kb-activity-list {
+  margin-top: var(--s-5);
 }
 
 .kb-portfolio-health--healthy,
@@ -1485,18 +1886,13 @@ a.kb-history-subj:hover {
   font-size: var(--fs-badge);
 }
 
-.kb-toolbar-btn.is-on {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 /* Legacy panel chrome (settings / help reuse close) */
 .kb-panel {
   width: 340px;
   flex-shrink: 0;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--r-lg);
   padding: var(--s-7) var(--s-8);
   position: sticky;
   top: 0;
@@ -1527,7 +1923,7 @@ a.kb-history-subj:hover {
   background: transparent;
   border: 1px solid var(--line);
   color: var(--fg2);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   width: 24px;
   height: 24px;
   padding: 0;
@@ -1558,7 +1954,7 @@ a.kb-history-subj:hover {
   background: var(--input);
   border: 1px solid var(--line);
   color: var(--text);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 7px 8px;
   font-family: var(--font);
   font-size: var(--fs-body);
@@ -1571,7 +1967,7 @@ a.kb-history-subj:hover {
   background: var(--fg);
   color: var(--bg);
   border: 1px solid var(--fg);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 8px;
   font-family: var(--mono);
   font-size: var(--fs-mono-sm);
@@ -1603,7 +1999,7 @@ a.kb-history-subj:hover {
   background: transparent;
   border: none;
   color: var(--fg3);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 4px 6px;
   cursor: pointer;
   text-align: left;
@@ -1619,7 +2015,7 @@ a.kb-history-subj:hover {
   background: var(--input);
   border: 1px solid var(--line);
   color: var(--text);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 0.3rem 0.55rem;
   font: inherit;
   font-size: var(--fs-mono-sm);
@@ -1636,7 +2032,7 @@ a.kb-history-subj:hover {
   flex-shrink: 0;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 0;
+  border-radius: var(--r-lg);
   padding: 12px;
   max-height: calc(100vh - 8rem);
   overflow-y: auto;
@@ -1695,7 +2091,7 @@ a.kb-history-subj:hover {
 .kb-quarantine-lane {
   background: color-mix(in srgb, var(--danger) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
-  border-radius: 0;
+  border-radius: var(--r-md);
   padding: 10px 12px;
 }
 
@@ -1732,7 +2128,7 @@ a.kb-history-subj:hover {
   background: var(--input);
   border: 1px solid var(--line);
   color: var(--text);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 4px 6px;
   font: inherit;
 }
@@ -1745,7 +2141,7 @@ a.kb-history-subj:hover {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   padding: 2px 5px;
-  border-radius: 0;
+  border-radius: var(--r-xs);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--accent);
   text-decoration: none;
@@ -1757,7 +2153,7 @@ a.kb-history-subj:hover {
 }
 
 .kb-banner {
-  border-radius: var(--radius);
+  border-radius: var(--r-md);
   padding: var(--s-5) var(--s-6);
   margin: 0 0 var(--s-6);
   border: 1px solid var(--line);
@@ -1785,7 +2181,7 @@ a.kb-history-subj:hover {
   background: var(--input);
   border: 1px solid var(--line);
   color: var(--text);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 5px 10px;
   font-family: var(--mono);
   font-size: var(--fs-mono-xs);
@@ -1832,7 +2228,7 @@ a.kb-history-subj:hover {
   background: var(--input);
   border: 1px solid var(--line);
   color: var(--text);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 6px 8px;
   font: inherit;
   font-size: var(--fs-body);
@@ -1853,7 +2249,7 @@ a.kb-history-subj:hover {
 .kb-conflict-list li {
   background: var(--bg);
   border: 1px solid var(--line);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 8px 10px;
 }
 
@@ -1911,7 +2307,7 @@ a.kb-history-subj:hover {
   padding: 20px 24px;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 0;
+  border-radius: var(--r-lg);
   box-shadow: var(--elev);
 }
 
@@ -1943,7 +2339,7 @@ a.kb-history-subj:hover {
   background: var(--input);
   border: 1px solid var(--line);
   color: var(--text);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 7px 9px;
   font-family: var(--font);
   font-size: var(--fs-body);
@@ -1956,7 +2352,7 @@ a.kb-history-subj:hover {
   background: var(--fg);
   color: var(--bg);
   border: 1px solid var(--fg);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 0 14px;
   height: 32px;
   font-family: var(--mono);
@@ -1996,7 +2392,7 @@ a.kb-history-subj:hover {
   color: var(--text);
   background: var(--input);
   border: 1px solid var(--line);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 8px;
   min-height: 2.5rem;
   text-transform: none;
@@ -2017,14 +2413,14 @@ a.kb-history-subj:hover {
   font-size: 0.9em;
   background: color-mix(in srgb, var(--line) 50%, transparent);
   padding: 0.05em 0.3em;
-  border-radius: 0;
+  border-radius: var(--r-xs);
 }
 
 .kb-md pre {
   overflow: auto;
   background: color-mix(in srgb, var(--line) 40%, transparent);
   padding: 0.5rem;
-  border-radius: 0;
+  border-radius: var(--r-md);
 }
 
 .kb-md a {
@@ -2037,20 +2433,58 @@ a.kb-history-subj:hover {
   padding: 0;
 }
 
+/* Structured log rows: date · actor · message on one line, wrapping only the
+   message. No box per row — the section label already frames it. */
 .kb-log {
   list-style: none;
-  margin: 0.35rem 0 0;
+  margin: var(--s-3) 0 0;
   padding: 0;
+  display: flex;
+  flex-direction: column;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
-.kb-log li {
-  margin-bottom: 0.35rem;
+.kb-log-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: baseline;
+  gap: var(--s-5);
+  padding: var(--s-3) 0;
   border-bottom: 1px solid var(--line2);
-  padding-bottom: 0.35rem;
 }
 
-.kb-log li:last-child {
+.kb-log-row:last-child {
   border-bottom: none;
+}
+
+.kb-log-date {
+  font-family: var(--mono);
+  font-size: var(--fs-mono-xs);
+  color: var(--fg3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.kb-log-actor {
+  font-family: var(--mono);
+  font-size: var(--fs-mono-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.kb-log-msg {
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.kb-log-empty {
+  margin: var(--s-3) 0 0;
+  font-size: 13px;
 }
 
 .kb-sidebar {
@@ -2058,7 +2492,7 @@ a.kb-history-subj:hover {
   max-width: 220px;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 0;
+  border-radius: var(--r-lg);
   padding: 10px;
   margin-right: 0;
   align-self: stretch;
@@ -2093,7 +2527,7 @@ a.kb-history-subj:hover {
   font: inherit;
   padding: 6px 4px;
   cursor: pointer;
-  border-radius: 0;
+  border-radius: var(--r-sm);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -2120,7 +2554,7 @@ a.kb-history-subj:hover {
   font-size: var(--fs-mono-sm);
   padding: 3px 4px;
   cursor: pointer;
-  border-radius: 0;
+  border-radius: var(--r-sm);
   display: flex;
   justify-content: space-between;
 }
@@ -2141,7 +2575,7 @@ a.kb-history-subj:hover {
   background: transparent;
   border: 1px dashed var(--line);
   color: var(--fg3);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 7px 8px;
   font-family: var(--mono);
   font-size: var(--fs-mono);
@@ -2167,9 +2601,9 @@ a.kb-history-subj:hover {
   background: var(--input);
   border: 1px solid var(--line);
   color: var(--fg2);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 0 10px;
-  height: 30px;
+  height: 34px;
   font-family: var(--mono);
   font-size: var(--fs-mono-xs);
   letter-spacing: 0.08em;
@@ -2183,13 +2617,23 @@ a.kb-history-subj:hover {
   font-size: var(--fs-mono-sm);
   color: var(--fg3);
   border: 1px solid color-mix(in srgb, currentColor 40%, var(--line));
-  border-radius: 0;
-  padding: 0 4px;
+  border-radius: var(--r-xs);
+  padding: 0 5px;
   font-weight: 600;
 }
 
+/* Priority reads by hue, not by weight — P0 red, P1 amber, P2 slate. */
 .kb-priority {
-  color: var(--danger);
+  color: var(--prio-slate);
+  border-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+
+.kb-priority[data-priority="P0"] {
+  color: var(--prio-red);
+}
+
+.kb-priority[data-priority="P1"] {
+  color: var(--prio-amber);
 }
 
 .kb-history-list {
@@ -2199,6 +2643,10 @@ a.kb-history-subj:hover {
   max-height: 10rem;
   overflow-y: auto;
   font-size: var(--fs-mono-sm);
+  /* Commit subjects are prose — undo the uppercase label casing .kb-field
+     applies to its children. */
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 .kb-history-list li {
@@ -2207,6 +2655,248 @@ a.kb-history-subj:hover {
   gap: 2px;
   padding: 6px 0;
   border-bottom: 1px solid var(--line2);
+}
+
+/* ——— Markdown editor (toolbar + write/preview) ——— */
+
+.kb-mde {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--input);
+  overflow: hidden;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.kb-mde-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--line2);
+  background: var(--panel);
+}
+
+.kb-mde-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.kb-mde-btn {
+  appearance: none;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--fg2);
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kb-mde-btn.is-mono {
+  font-family: var(--mono);
+  font-weight: 500;
+}
+
+.kb-mde-btn:hover:not(:disabled) {
+  background: var(--line2);
+  color: var(--fg);
+}
+
+.kb-mde-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.kb-mde-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  overflow: hidden;
+}
+
+.kb-mde-tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--fg3);
+  font-family: var(--mono);
+  font-size: var(--fs-mono-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.kb-mde-tab.is-on {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.kb-mde-input {
+  display: block;
+  width: 100%;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent;
+  color: var(--text);
+  padding: var(--s-4);
+  font-family: var(--mono);
+  font-size: 14.5px;
+  line-height: 1.55;
+  resize: vertical;
+  outline: none;
+}
+
+.kb-mde-preview {
+  border: 0 !important;
+  border-radius: 0 !important;
+  min-height: 6rem;
+}
+
+/* ——— Checklist (modal) ——— */
+
+.kb-checklist {
+  list-style: none;
+  margin: var(--s-3) 0 var(--s-4);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.kb-checklist-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-xs);
+}
+
+.kb-checklist-item:hover {
+  background: var(--line2);
+}
+
+.kb-checklist-label {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font);
+  font-size: 15px;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.kb-checklist-label input {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+.kb-checklist-label .is-done {
+  color: var(--fg3);
+  text-decoration: line-through;
+}
+
+.kb-checklist-remove {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--fg3);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.kb-checklist-item:hover .kb-checklist-remove {
+  opacity: 1;
+}
+
+.kb-checklist-remove:hover {
+  color: var(--danger);
+}
+
+.kb-checklist-add {
+  display: flex;
+  gap: var(--s-3);
+}
+
+.kb-checklist-add input {
+  flex: 1;
+  min-width: 0;
+}
+
+.kb-checklist-add button {
+  appearance: none;
+  flex: 0 0 auto;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg2);
+  font-family: var(--mono);
+  font-size: var(--fs-mono-sm);
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.kb-checklist-add button:hover {
+  color: var(--fg);
+  border-color: var(--fg3);
+}
+
+/* Watch-vs-clone toggle in the source binding form. */
+.kb-code-watch {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-5);
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--fg2);
+  cursor: pointer;
+}
+
+.kb-code-watch input {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Count chip beside a field label ("Code commits  3"). */
+.kb-field-count {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg3);
+  background: var(--line2);
+  border-radius: var(--r-pill);
+  padding: 1px 6px;
+  letter-spacing: 0;
+  margin-left: var(--s-2);
 }
 
 .kb-history-sha {
@@ -2239,7 +2929,7 @@ a.kb-history-subj:hover {
   background: var(--fg);
   color: var(--bg);
   padding: 0.4rem 0.75rem;
-  border-radius: 0;
+  border-radius: var(--r-sm);
   font-size: var(--fs-body);
 }
 
@@ -2300,7 +2990,7 @@ textarea:focus-visible,
 .kb-help-card {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 0;
+  border-radius: var(--r-lg);
   padding: 14px 16px;
   max-width: 22rem;
   width: 90%;
@@ -2321,7 +3011,7 @@ textarea:focus-visible,
   font-size: 0.9em;
   background: var(--input);
   border: 1px solid var(--line);
-  border-radius: 0;
+  border-radius: var(--r-xs);
   padding: 0.05rem 0.3rem;
   color: var(--text);
 }
@@ -2358,16 +3048,27 @@ textarea:focus-visible,
   box-sizing: border-box;
 }
 
+/* Collapsed "+ column" affordance is 200px in the design; it grows to a full
+   column only once the composer is open. */
+.kb-add-list:not(.kb-add-list--open) {
+  width: 240px;
+  min-width: 240px;
+  max-width: 240px;
+  flex: 0 0 240px;
+}
+
 .kb-column {
   position: relative;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--r-lg);
   display: flex;
   flex-direction: column;
+  /* Hug content like the design; only cap at viewport so long lists still
+     scroll internally rather than growing the page. */
   max-height: 100%;
   min-height: 0;
-  height: 100%;
+  height: auto;
   box-shadow: var(--elev);
   transition: border-color 0.12s ease;
   outline: none;
@@ -2434,18 +3135,18 @@ textarea:focus-visible,
   border-bottom: 1px solid var(--line2);
   gap: var(--s-4);
   flex-shrink: 0;
-  min-height: 40px;
+  min-height: 44px;
   width: 100%;
   box-sizing: border-box;
 }
 
 .kb-column-name {
   margin: 0;
-  font-family: var(--mono);
-  font-size: var(--fs-mono);
+  font-family: var(--font);
+  font-size: 15px;
   font-weight: 600;
-  letter-spacing: var(--ls-label);
-  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  text-transform: none;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2457,12 +3158,12 @@ textarea:focus-visible,
 .kb-column-count {
   font-family: var(--mono);
   color: var(--fg3);
-  font-size: var(--fs-badge);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 0 var(--s-2);
+  background: var(--line2);
+  border: 0;
+  border-radius: var(--r-pill);
+  padding: 1px 6px;
   min-width: auto;
   text-align: center;
   line-height: 1.4;
@@ -2497,7 +3198,7 @@ textarea:focus-visible,
   padding: var(--s-4) var(--s-2);
   text-align: left;
   border: none;
-  border-radius: var(--radius);
+  border-radius: var(--r-md);
   width: 100%;
   box-sizing: border-box;
 }
@@ -2523,8 +3224,8 @@ textarea:focus-visible,
   box-sizing: border-box;
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: var(--s-5);
+  border-radius: var(--r-md);
+  padding: 11px;
   cursor: grab;
   user-select: none;
   transition: border-color 0.12s ease, opacity 0.1s ease;
@@ -2575,11 +3276,36 @@ textarea:focus-visible,
   min-width: 0;
 }
 
+/* Card-face checklist progress (design: label row + 2px track). */
+.kb-card-checklist {
+  margin-top: var(--s-5);
+}
+
+.kb-card-checklist-head {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: var(--fs-mono-xs);
+  color: var(--fg3);
+  margin-bottom: var(--s-2);
+}
+
+.kb-card-checklist-track {
+  height: 2px;
+  background: var(--line2);
+}
+
+.kb-card-checklist-fill {
+  height: 2px;
+  background: var(--col-accent, var(--fg2));
+  transition: width 0.15s ease;
+}
+
 .kb-card-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--s-4) var(--s-5);
+  gap: var(--s-3) var(--s-5);
   margin-top: var(--s-5);
   font-family: var(--mono);
   font-size: var(--fs-mono-sm);
@@ -2594,10 +3320,12 @@ textarea:focus-visible,
 
 .kb-card-id {
   font-family: var(--mono);
-  font-size: var(--fs-badge);
+  font-size: var(--fs-mono-sm);
   opacity: 0.9;
   letter-spacing: 0.02em;
-  max-width: 100%;
+  /* kanbanly ids are long uuids; cap them so they don't crowd the meta row
+     the way the design's short ids never would. Full id stays in the title. */
+  max-width: 11ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2618,12 +3346,14 @@ textarea:focus-visible,
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
-  padding: var(--s-1) 5px;
-  border-radius: var(--radius);
+  /* Each label carries its own hue (set inline as --label-color). */
+  background: color-mix(in srgb, var(--label-color, var(--accent)) 14%, transparent);
+  color: var(--label-color, var(--accent));
+  padding: var(--s-1) var(--s-3);
+  border-radius: var(--r-xs);
   line-height: 1.2;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border: 1px solid
+    color-mix(in srgb, var(--label-color, var(--accent)) 35%, transparent);
 }
 
 .kb-drop-indicator {
@@ -2638,7 +3368,7 @@ textarea:focus-visible,
 
 .kb-add-list {
   align-self: flex-start;
-  border-radius: var(--radius);
+  border-radius: var(--r-md);
   background: transparent;
   border: 1px dashed var(--line);
   padding: 0;
@@ -2667,7 +3397,7 @@ textarea:focus-visible,
   letter-spacing: 0.08em;
   text-transform: uppercase;
   padding: var(--s-6);
-  border-radius: var(--radius);
+  border-radius: var(--r-md);
   cursor: pointer;
   opacity: 1;
 }
@@ -2688,7 +3418,7 @@ textarea:focus-visible,
   background: var(--input);
   border: 1px solid var(--fg3);
   color: var(--text);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 8px;
   font: inherit;
   font-size: var(--fs-body-lg);
@@ -2706,7 +3436,7 @@ textarea:focus-visible,
   background: var(--fg);
   color: var(--bg);
   border: 1px solid var(--fg);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 4px 10px;
   font-family: var(--mono);
   font-size: var(--fs-mono-sm);
@@ -2730,7 +3460,7 @@ textarea:focus-visible,
   letter-spacing: 0.1em;
   text-transform: uppercase;
   padding: 4px 10px;
-  border-radius: 0;
+  border-radius: var(--r-sm);
   cursor: pointer;
 }
 
@@ -2749,13 +3479,13 @@ textarea:focus-visible,
   background: var(--input);
   border: 1px solid var(--line);
   color: var(--text);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 5px 8px;
   font: inherit;
   font-size: var(--fs-body);
   min-width: 8rem;
   max-width: 12rem;
-  height: 30px;
+  height: 34px;
 }
 
 .kb-column-header-right {
@@ -2771,7 +3501,7 @@ textarea:focus-visible,
   background: var(--input);
   border: 1px solid var(--fg3);
   color: var(--text);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 3px 6px;
   font-family: var(--mono);
   font-size: var(--fs-mono);
@@ -2794,10 +3524,10 @@ textarea:focus-visible,
   font-weight: 600;
   letter-spacing: 0.05em;
   line-height: 1;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   padding: 0;
-  border-radius: 0;
+  border-radius: var(--r-sm);
   cursor: pointer;
   display: grid;
   place-items: center;
@@ -2818,7 +3548,7 @@ textarea:focus-visible,
   margin-top: var(--s-2);
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--r-menu);
   box-shadow: var(--shadow-menu);
   padding: var(--s-5);
   display: flex;
@@ -2836,7 +3566,7 @@ textarea:focus-visible,
   font: inherit;
   font-size: var(--fs-mono-sm);
   padding: 5px 6px;
-  border-radius: 0;
+  border-radius: var(--r-sm);
   cursor: pointer;
 }
 
@@ -2862,7 +3592,7 @@ textarea:focus-visible,
   background: var(--input);
   border: 1px solid var(--line);
   color: var(--text);
-  border-radius: 0;
+  border-radius: var(--r-sm);
   padding: 5px 6px;
   font: inherit;
   font-size: var(--fs-mono-sm);
@@ -2892,4 +3622,110 @@ textarea:focus-visible,
   background: var(--line);
   border: 3px solid transparent;
   background-clip: content-box;
+}
+
+/* ——— DataTable toolbar (sort strip + filter box) ———
+   The lists themselves keep the classes they already had — kb-history-list,
+   kb-activity-list, kb-disclose-list — so nothing below restyles an existing
+   row. Only the controls above a list are new. Sizing borrows from
+   .kb-toolbar-btn so the strip reads as part of the existing chrome.
+
+   Both text-transform resets matter: these toolbars sit inside .kb-field and
+   .kb-settings-section, which uppercase their children, and a search box must
+   show what the user actually typed. */
+.kb-datatable-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  margin: var(--s-4) 0 var(--s-2);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.kb-datatable-filter {
+  flex: 1 1 10rem;
+  min-width: 7rem;
+  background: var(--input);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: var(--r-sm);
+  padding: var(--s-3) var(--s-4);
+  font-family: var(--font);
+  font-size: var(--fs-body);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.kb-datatable-filter::placeholder {
+  color: var(--fg3);
+}
+
+.kb-datatable-sort {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.kb-datatable-sort-label {
+  font-family: var(--mono);
+  font-size: var(--fs-mono-xs);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--fg3);
+}
+
+.kb-datatable-sort-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  color: var(--fg2);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: var(--fs-mono-xs);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  padding: var(--s-1) var(--s-4);
+}
+
+.kb-datatable-sort-btn:hover {
+  color: var(--fg);
+  border-color: var(--fg3);
+}
+
+/* Active sort inverts to solid fg-on-bg — the same selected-state convention as
+   .kb-priority-seg button.is-on and .kb-theme-switch [aria-pressed="true"].
+   (.kb-toolbar-btn.is-on is the softer 8% tint; a sort toggle reads better as a
+   hard selection, like the other pick-exactly-one controls.) */
+.kb-datatable-sort-btn[aria-pressed="true"] {
+  background: var(--fg);
+  border-color: var(--fg);
+  color: var(--bg);
+}
+
+.kb-datatable-sort-dir {
+  font-size: var(--fs-mono-sm);
+  line-height: 1;
+}
+
+.kb-datatable-empty {
+  margin: var(--s-4) 0 0;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* Manual refresh spinner. */
+@keyframes kb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.kb-spin {
+  display: inline-block;
+  animation: kb-spin 0.8s linear infinite;
 }

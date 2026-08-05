@@ -30,8 +30,29 @@ export function classifyPushError(
   const m = message ?? "";
   const lower = m.toLowerCase();
 
+  // No credential was supplied at all. git fell back to an interactive prompt
+  // and died because there is no TTY. This is NOT a rejected token: the remote
+  // was never even asked. Telling the user to re-enter a valid PAT sends them
+  // to fix the one thing that is not broken, so it gets its own message.
+  const noCredentialSupplied =
+    /could not read username|could not read password|terminal prompts disabled/i.test(
+      m,
+    ) && !/\b401\b|unauthorized|bad credentials|invalid username or token/i.test(m);
+  if (noCredentialSupplied) {
+    return {
+      kind: "credential",
+      title: "No credential supplied to git",
+      detail:
+        "git had no username/token to send, so the remote was never contacted — " +
+        "this is a binding problem, not a bad PAT. Check that this connection " +
+        "has a saved credential selected (Settings → Repositories).",
+      localWritesOk: true,
+      freezeSync: false,
+    };
+  }
+
   // Explicit HTTP status first (may appear alongside "unable to access")
-  const has401 = /\b401\b|unauthorized|authentication failed|invalid username or token|bad credentials|could not read username|terminal prompts disabled|ghp_[a-z0-9]+.*invalid/i.test(
+  const has401 = /\b401\b|unauthorized|authentication failed|invalid username or token|bad credentials|terminal prompts disabled|ghp_[a-z0-9]+.*invalid/i.test(
     m,
   );
   const has403 = /\b403\b|forbidden|write access not granted|permission denied \(publickey\)|insufficient.*scope|missing.*scope/i.test(

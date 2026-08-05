@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { resolve, join } from "node:path";
 import {
   existsSync,
@@ -100,6 +101,7 @@ export async function connectLocalRepo(
   const remoteKey = path;
   const { index } = await indexStore.ensure(remoteKey, storage);
 
+  ensureMergeDriver(path);
   return { path, remoteKey, storage, index };
 }
 
@@ -191,6 +193,9 @@ export async function connectRemoteRepo(
   const indexStore = options?.indexStore ?? globalIndexStore;
   const { index } = await indexStore.ensure(dest, storage);
 
+  // Cloned repos carry .gitattributes from the remote but no driver config.
+  ensureMergeDriver(dest);
+
   return {
     path: dest,
     remoteKey: dest,
@@ -242,6 +247,56 @@ export function ensureBoardScaffold(
     writeFileSync(ga, "**/cards/*.md merge=kanbanly\n", "utf8");
   }
   return { created: true, boardPath };
+}
+
+/**
+ * Register the kanbanly card merge driver in a clone's git config.
+ *
+ * `.gitattributes` says `merge=kanbanly`, but that is only a NAME — without a
+ * matching `merge.kanbanly.driver` entry git silently falls back to the default
+ * text merge and writes conflict markers into card files. `kanbanly setup` does
+ * this for repos it scaffolds; every repo the server clones itself was missing
+ * it, so the headline "cards merge cleanly" guarantee did not hold there.
+ */
+export function ensureMergeDriver(repoPath: string): boolean {
+  if (!existsSync(join(repoPath, ".git"))) return false;
+  const want = mergeDriverCommand();
+  const existing = spawnSync("git", ["config", "--get", "merge.kanbanly.driver"], {
+    cwd: repoPath,
+    encoding: "utf8",
+  });
+  // Re-write when it differs: a clone may carry a command pointing at a CLI
+  // that does not exist in this runtime, which fails as an unresolved conflict.
+  if (existing.status === 0 && (existing.stdout ?? "").trim() === want) return false;
+  spawnSync("git", ["config", "merge.kanbanly.name", "kanbanly card merge"], {
+    cwd: repoPath,
+  });
+  spawnSync("git", ["config", "merge.kanbanly.driver", want], {
+    cwd: repoPath,
+  });
+  return true;
+}
+
+/**
+ * Command git should run for `merge=kanbanly`.
+ *
+ * A bare `kanbanly merge-driver …` only works where the CLI is installed
+ * globally. Inside the container it is not on PATH, so git resolved the driver,
+ * ran it, and got "kanbanly: not found" — which git reports as an unresolved
+ * conflict. Point at this runtime's own CLI entry instead, which is correct both
+ * for a global install and for `bun` running from the repo.
+ */
+export function mergeDriverCommand(): string {
+  const onPath = spawnSync("sh", ["-c", "command -v kanbanly"], {
+    encoding: "utf8",
+  });
+  if (onPath.status === 0 && (onPath.stdout ?? "").trim()) {
+    return "kanbanly merge-driver %O %A %B %L %P";
+  }
+  // cli.ts sits beside this module in packages/server/src.
+  const cli = join(import.meta.dir, "cli.ts");
+  if (!existsSync(cli)) return "kanbanly merge-driver %O %A %B %L %P";
+  return `"${process.execPath}" "${cli}" merge-driver %O %A %B %L %P`;
 }
 
 /**

@@ -6,8 +6,20 @@
 export type CodeBinding = {
   /** Absolute (or resolved) path to the project git root. */
   path?: string;
-  /** Optional remote URL (documentation / future clone-on-demand). */
+  /** Optional remote URL (documentation / clone-on-demand / watch). */
   remote?: string;
+  /**
+   * Read commits from the forge API instead of cloning. Keeps zero local state
+   * — nothing is written to ~/.kanbanly/code-clones. GitHub remotes only;
+   * other hosts fall back to the clone path.
+   */
+  watch?: boolean;
+  /**
+   * Id of a saved credential in the credential book. Persisted because watch
+   * mode needs a token on every read — unlike cloning, where the credential is
+   * only needed once and then lives inside the checkout.
+   */
+  credentialId?: string;
 };
 
 export type ProjectCommit = {
@@ -31,6 +43,11 @@ export function resolveCodeBinding(
   return {
     path: path || undefined,
     remote: remote || undefined,
+    watch: o.watch === true ? true : undefined,
+    credentialId:
+      typeof o.credentialId === "string" && o.credentialId.trim()
+        ? o.credentialId.trim()
+        : undefined,
   };
 }
 
@@ -44,9 +61,11 @@ export function mergeCodeBindingSettings(
     delete next.code;
     return next;
   }
-  const code: Record<string, string> = {};
+  const code: Record<string, string | boolean> = {};
   if (binding.path?.trim()) code.path = binding.path.trim();
   if (binding.remote?.trim()) code.remote = binding.remote.trim();
+  if (binding.watch) code.watch = true;
+  if (binding.credentialId?.trim()) code.credentialId = binding.credentialId.trim();
   next.code = code;
   return next;
 }

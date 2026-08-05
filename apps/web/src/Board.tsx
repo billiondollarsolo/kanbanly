@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
@@ -20,89 +21,135 @@ import {
   dropToMovePayload,
   filterCards,
   formatBoardPath,
-  formatSettingsPath,
   isFilterActive,
   isInnermostDropTarget,
-  isSettingsSection,
   keyToMoveDirection,
   keyToNavDirection,
   keyboardMoveTarget,
   navigateFocus,
-  readWindowAppRoute,
   renderMarkdown,
   resolveDropIndex,
   staticPrStatus,
-  writeWindowAppRoute,
   checkDoingWip,
   formatPulseAge,
   isDoingColumn,
-  writeWindowBoardRoute,
+  type AppRoute,
+  type CrossBoardActivityEntry,
   type DropEdge,
   type NavBoard,
   type SettingsSection,
 } from "@kanbanly/core";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  addColumn,
-  archiveCards,
-  clearSyncFreeze,
-  connectRepo,
-  createBoard,
-  createCard,
-  deleteColumn,
-  deleteCredentialBook,
-  getActivity,
-  getBoard,
-  getBoardNotes,
-  getCardHistory,
-  connectCodeSource,
-  getCodeHistory,
-  getFleetHealth,
-  getPortfolio,
-  getSync,
-  getWorkspace,
-  listBoards,
-  type FleetHealthResponse,
-  type PortfolioResponse,
-  listConflicts,
-  listRemotes,
-  moveCard,
-  patchBoardBinding,
-  patchConnection,
-  pullRemote,
-  putBoardNotes,
-  remapColumn,
-  renameColumn,
-  reorderColumns,
-  resolveConflict,
-  retrySync,
-  setActiveRemote,
-  setCodeBinding,
-  setCredentials,
-  getPrStatuses,
   subscribeBoardEvents,
-  updateCard,
-  upsertCredentialBook,
-  type ProjectCommit,
-  type WorkspaceBoard,
-  type WorkspaceCredential,
-  type WorkspaceConnection,
-  type WorkspaceSnapshot,
   type ActivityEntry,
   type BoardCard,
   type BoardDetail,
-  type BoardSummary,
   type CardHistoryEntry,
-  type ConflictItem,
+  type ChecklistItem,
   type PrStatusResponse,
-  type RemoteSummary,
-  type SyncState,
+  type ProjectCommit,
+  type WorkspaceBoard,
+  type WorkspaceConnection,
+  type WorkspaceCredential,
 } from "./api.ts";
+import {
+  boardQuery,
+  boardsQuery,
+  commitsByCardId,
+  fleetHealthQuery,
+  portfolioQuery,
+  prRefsFromCards,
+  qk,
+  remotesQuery,
+  syncQuery,
+  useActivity,
+  useAddColumn,
+  useArchiveCards,
+  useBindCodeSource,
+  useBoard,
+  useBoardNotes,
+  useBoards,
+  useCardHistory,
+  useClearSyncFreeze,
+  useCodeHistory,
+  useConflicts,
+  useConnectRepo,
+  useCreateBoard,
+  useCreateCard,
+  useDeleteColumn,
+  useDeleteCredentialBook,
+  useFleetHealth,
+  useInvalidators,
+  useMoveCard,
+  usePatchBoardBinding,
+  usePatchConnection,
+  usePortfolio,
+  usePrStatuses,
+  usePullRemote,
+  usePutBoardNotes,
+  useRemapColumn,
+  useRenameColumn,
+  useReorderColumns,
+  useResolveConflict,
+  useRetrySync,
+  useSetActiveRemote,
+  useSetCredentials,
+  useSync,
+  useUpdateCard,
+  useUpsertCredentialBook,
+  useWorkspace,
+  credentialBookQuery,
+  useRefreshRepo,
+} from "./queries.ts";
+import {
+  legacySlugReplace,
+  useAppRouteReader,
+  useNavigateTo,
+  usePopNavigation,
+} from "./routes.tsx";
 import {
   applyTheme,
   watchSystemTheme,
   readThemePreference,
   type ThemePreference,
 } from "./theme.ts";
+import {
+  alertKey,
+  pruneAcked,
+  readAckedAlerts,
+  writeAckedAlerts,
+} from "./alerts.ts";
+import { MarkdownEditor } from "./MarkdownEditor.tsx";
+import { CardLog } from "./CardLog.tsx";
+import {
+  Chip,
+  CountBadge,
+  DueChip,
+  LabelChip,
+  PriorityChip,
+} from "./ui/Chip.tsx";
+import { IconButton, SegmentedControl, ToolbarButton } from "./ui/Button.tsx";
+import { MenuItem, Popover } from "./ui/Popover.tsx";
+import { EmptyState, Field, SectionTitle } from "./ui/Field.tsx";
+import { DataTable, type DataTableColumn } from "./ui/DataTable.tsx";
+import { AssigneeChip, Avatar, Dot } from "./ui/Avatar.tsx";
+import { ProgressBar, SegmentBar } from "./ui/Progress.tsx";
+import {
+  columnAccent,
+  columnAccents,
+  labelColor,
+  paletteFor,
+} from "./ui/palette.ts";
+
+/** Column id → display name ("in-review" → "In Review"). */
+function columnLabel(id: string): string {
+  return id
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
 
 type CardDragData = {
   type: "card";
@@ -239,29 +286,33 @@ function CardView({
         {card.labels && card.labels.length > 0 ? (
           <div className="kb-labels">
             {card.labels.map((l) => (
-              <span key={l} className="kb-label">
-                {l}
-              </span>
+              <LabelChip key={l} label={l} color={labelColor(l)} />
             ))}
           </div>
         ) : null}
         <div className="kb-card-title">{card.title}</div>
+        {card.checklist && card.checklist.length > 0 ? (
+          <ProgressBar
+            done={card.checklist.filter((i) => i.done).length}
+            total={card.checklist.length}
+            testId={`checklist-${card.id}`}
+          />
+        ) : null}
         <div className="kb-card-meta">
           {card.priority ? (
-            <span className="kb-priority" data-testid={`priority-${card.id}`}>
-              {card.priority}
-            </span>
+            <PriorityChip
+              priority={card.priority}
+              data-testid={`priority-${card.id}`}
+            />
           ) : null}
           {card.due ? (
-            <span className="kb-due" data-testid={`due-${card.id}`}>
-              {card.due}
-            </span>
+            <DueChip due={card.due} data-testid={`due-${card.id}`} />
           ) : null}
-          <span className="kb-card-id">{card.id}</span>
+          <Chip base="kb-card-id" title={card.id}>
+            {card.id}
+          </Chip>
           <span className="kb-card-meta-spacer" aria-hidden="true" />
-          {card.assignee ? (
-            <span className="kb-assignee">{card.assignee}</span>
-          ) : null}
+          {card.assignee ? <AssigneeChip name={card.assignee} /> : null}
         </div>
         {card.pr ? <PrBadge pr={card.pr} live={prStatuses?.[card.pr]} /> : null}
       </div>
@@ -369,16 +420,14 @@ function CreateBoardForm({
 
   if (!open) {
     return (
-      <button
-        type="button"
-        className="kb-toolbar-btn"
+      <ToolbarButton
         data-testid="create-board-open"
         onClick={() => setOpen(true)}
         disabled={busy}
         title="Create a new board (layout A subdirectory)"
       >
         + Board
-      </button>
+      </ToolbarButton>
     );
   }
 
@@ -403,18 +452,14 @@ function CreateBoardForm({
           }
         }}
       />
-      <button
-        type="button"
-        className="kb-toolbar-btn"
+      <ToolbarButton
         data-testid="create-board-submit"
         disabled={!name.trim() || saving || busy}
         onClick={() => void submit()}
       >
         {saving ? "…" : "Create"}
-      </button>
-      <button
-        type="button"
-        className="kb-toolbar-btn"
+      </ToolbarButton>
+      <ToolbarButton
         data-testid="create-board-cancel"
         onClick={() => {
           setOpen(false);
@@ -422,7 +467,7 @@ function CreateBoardForm({
         }}
       >
         Cancel
-      </button>
+      </ToolbarButton>
     </div>
   );
 }
@@ -518,6 +563,7 @@ function ColumnView({
   boardId,
   columnId,
   columnName,
+  accent,
   cards,
   onDropCard,
   onDropColumn,
@@ -539,6 +585,8 @@ function ColumnView({
   boardId: string;
   columnId: string;
   columnName: string;
+  /** Board-resolved accent; falls back to a hash when not supplied. */
+  accent?: string;
   cards: BoardCard[];
   onDropCard: (
     cardId: string,
@@ -765,22 +813,7 @@ function ColumnView({
     return combine(...cleanups);
   }, [el, cards, boardId, columnId, onDropCard]);
 
-  // Stable accent from column id (design color bar)
-  const accentPalette = [
-    "#4a7dbd",
-    "#3f9c8f",
-    "#5f9c4f",
-    "#c08a2e",
-    "#c0563e",
-    "#8a6bc0",
-    "#bb5f8a",
-    "#77808a",
-  ];
-  let accentHash = 0;
-  for (let i = 0; i < columnId.length; i++) {
-    accentHash = (accentHash + columnId.charCodeAt(i) * (i + 1)) % 997;
-  }
-  const colAccent = accentPalette[accentHash % accentPalette.length]!;
+  const colAccent = accent ?? columnAccent(columnId);
 
   return (
     <section
@@ -860,136 +893,137 @@ function ColumnView({
           </h3>
         )}
         <div className="kb-column-header-right">
-          <span
+          <CountBadge
             className="kb-column-count"
+            value={cards.length}
             data-testid={`count-${columnId}`}
             aria-label={`${cards.length} cards`}
-          >
-            {cards.length}
-          </span>
+          />
           {onRenameColumn || onMoveColumn || onDeleteColumn ? (
-            <div className="kb-col-menu-wrap">
-              <button
-                type="button"
-                className="kb-col-menu-btn"
-                data-testid={`col-menu-${columnId}`}
-                aria-label={`List actions for ${columnName}`}
-                aria-expanded={menuOpen}
-                onClick={() => {
-                  setMenuOpen((v) => !v);
-                  setDeleteOpen(false);
-                }}
-              >
-                ···
-              </button>
-              {menuOpen ? (
-                <div className="kb-col-menu" data-testid={`col-menu-panel-${columnId}`} role="menu">
-                  {onRenameColumn ? (
+            // No `onClose`: this menu has never dismissed on an outside click
+            // or Escape, and adding either here would be a behaviour change.
+            <Popover
+              open={menuOpen}
+              className="kb-col-menu-wrap"
+              panelClassName="kb-col-menu"
+              panelTestId={`col-menu-panel-${columnId}`}
+              role="menu"
+              anchor={
+                <button
+                  type="button"
+                  className="kb-col-menu-btn"
+                  data-testid={`col-menu-${columnId}`}
+                  aria-label={`List actions for ${columnName}`}
+                  aria-expanded={menuOpen}
+                  onClick={() => {
+                    setMenuOpen((v) => !v);
+                    setDeleteOpen(false);
+                  }}
+                >
+                  ···
+                </button>
+              }
+            >
+              {onRenameColumn ? (
+                <MenuItem
+                  role="menuitem"
+                  testId={`col-rename-${columnId}`}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setRenameValue(columnName);
+                    setRenaming(true);
+                  }}
+                >
+                  Rename list
+                </MenuItem>
+              ) : null}
+              {onMoveColumn && canMoveLeft ? (
+                <MenuItem
+                  role="menuitem"
+                  testId={`col-move-left-${columnId}`}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    void onMoveColumn(columnId, -1);
+                  }}
+                >
+                  Move left
+                </MenuItem>
+              ) : null}
+              {onMoveColumn && canMoveRight ? (
+                <MenuItem
+                  role="menuitem"
+                  testId={`col-move-right-${columnId}`}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    void onMoveColumn(columnId, 1);
+                  }}
+                >
+                  Move right
+                </MenuItem>
+              ) : null}
+              {onDeleteColumn ? (
+                <MenuItem
+                  role="menuitem"
+                  className="kb-col-menu-danger"
+                  testId={`col-delete-${columnId}`}
+                  onClick={() => {
+                    setDeleteOpen(true);
+                    const first = otherColumns?.[0]?.id ?? "archive";
+                    setDeleteMoveTo(cards.length > 0 ? first : "");
+                  }}
+                >
+                  Delete list…
+                </MenuItem>
+              ) : null}
+              {deleteOpen && onDeleteColumn ? (
+                <div className="kb-col-delete" data-testid={`col-delete-panel-${columnId}`}>
+                  {cards.length > 0 ? (
+                    <>
+                      <EmptyState>
+                        {cards.length} card{cards.length === 1 ? "" : "s"} — move to:
+                      </EmptyState>
+                      <select
+                        value={deleteMoveTo}
+                        onChange={(e) => setDeleteMoveTo(e.target.value)}
+                        data-testid={`col-delete-move-${columnId}`}
+                      >
+                        {(otherColumns ?? []).map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                        <option value="archive">Archive all cards</option>
+                      </select>
+                    </>
+                  ) : (
+                    <EmptyState>Delete empty list?</EmptyState>
+                  )}
+                  <div className="kb-col-delete-actions">
                     <button
                       type="button"
-                      role="menuitem"
-                      data-testid={`col-rename-${columnId}`}
-                      onClick={() => {
-                        setMenuOpen(false);
-                        setRenameValue(columnName);
-                        setRenaming(true);
-                      }}
-                    >
-                      Rename list
-                    </button>
-                  ) : null}
-                  {onMoveColumn && canMoveLeft ? (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      data-testid={`col-move-left-${columnId}`}
-                      onClick={() => {
-                        setMenuOpen(false);
-                        void onMoveColumn(columnId, -1);
-                      }}
-                    >
-                      Move left
-                    </button>
-                  ) : null}
-                  {onMoveColumn && canMoveRight ? (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      data-testid={`col-move-right-${columnId}`}
-                      onClick={() => {
-                        setMenuOpen(false);
-                        void onMoveColumn(columnId, 1);
-                      }}
-                    >
-                      Move right
-                    </button>
-                  ) : null}
-                  {onDeleteColumn ? (
-                    <button
-                      type="button"
-                      role="menuitem"
                       className="kb-col-menu-danger"
-                      data-testid={`col-delete-${columnId}`}
+                      data-testid={`col-delete-confirm-${columnId}`}
                       onClick={() => {
-                        setDeleteOpen(true);
-                        const first = otherColumns?.[0]?.id ?? "archive";
-                        setDeleteMoveTo(cards.length > 0 ? first : "");
+                        setMenuOpen(false);
+                        setDeleteOpen(false);
+                        void onDeleteColumn(
+                          columnId,
+                          cards.length > 0 ? deleteMoveTo || undefined : undefined,
+                        );
                       }}
                     >
-                      Delete list…
+                      Confirm delete
                     </button>
-                  ) : null}
-                  {deleteOpen && onDeleteColumn ? (
-                    <div className="kb-col-delete" data-testid={`col-delete-panel-${columnId}`}>
-                      {cards.length > 0 ? (
-                        <>
-                          <p className="kb-muted">
-                            {cards.length} card{cards.length === 1 ? "" : "s"} — move to:
-                          </p>
-                          <select
-                            value={deleteMoveTo}
-                            onChange={(e) => setDeleteMoveTo(e.target.value)}
-                            data-testid={`col-delete-move-${columnId}`}
-                          >
-                            {(otherColumns ?? []).map((c) => (
-                              <option key={c.id} value={c.id}>
-                                {c.name}
-                              </option>
-                            ))}
-                            <option value="archive">Archive all cards</option>
-                          </select>
-                        </>
-                      ) : (
-                        <p className="kb-muted">Delete empty list?</p>
-                      )}
-                      <div className="kb-col-delete-actions">
-                        <button
-                          type="button"
-                          className="kb-col-menu-danger"
-                          data-testid={`col-delete-confirm-${columnId}`}
-                          onClick={() => {
-                            setMenuOpen(false);
-                            setDeleteOpen(false);
-                            void onDeleteColumn(
-                              columnId,
-                              cards.length > 0 ? deleteMoveTo || undefined : undefined,
-                            );
-                          }}
-                        >
-                          Confirm delete
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeleteOpen(false)}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
+                    <button
+                      type="button"
+                      onClick={() => setDeleteOpen(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </div>
               ) : null}
-            </div>
+            </Popover>
           ) : null}
         </div>
       </header>
@@ -1005,9 +1039,9 @@ function ColumnView({
       ) : null}
       <div className="kb-column-cards kb-cards">
         {cards.length === 0 ? (
-          <div className="kb-empty" data-testid={`empty-${columnId}`}>
+          <EmptyState tone="empty" as="div" testId={`empty-${columnId}`}>
             Empty
-          </div>
+          </EmptyState>
         ) : (
           cards.map((card) => (
             <div key={card.id} className="kb-card-slot">
@@ -1061,15 +1095,107 @@ function ColumnView({
   );
 }
 
+/**
+ * Every commit log in the app renders the same three stacked cells — sha,
+ * subject, "author · date" — and shares these sort keys.
+ *
+ * `author` is a column even though it never gets a cell of its own: it lives
+ * inside the byline, so hiding it is what lets you sort and search by author
+ * without splitting the byline into two elements and changing the markup.
+ */
+const COMMIT_HIDDEN_COLUMNS = ["author"] as const;
+
+/** Shared by all three commit lists: the byline cell plus the author sort key. */
+function commitBylineColumns<
+  T extends { date: string; author: string },
+>(): DataTableColumn<T>[] {
+  return [
+    {
+      id: "date",
+      header: "date",
+      accessorFn: (c) => c.date,
+      // Newest-first is what you want from a log; ascending is the odd case.
+      sortDescFirst: true,
+      cell: (ctx) => (
+        <span className="kb-muted">
+          {ctx.row.original.author} · {ctx.row.original.date.slice(0, 10)}
+        </span>
+      ),
+    },
+    { id: "author", header: "author", accessorFn: (c) => c.author },
+  ];
+}
+
+/** Boards-repo log for one card's markdown file. Shas have nowhere to link. */
+const CARD_HISTORY_COLUMNS: DataTableColumn<CardHistoryEntry>[] = [
+  {
+    id: "sha",
+    accessorFn: (h) => h.sha,
+    cell: (ctx) => (
+      <code className="kb-history-sha">{ctx.row.original.sha.slice(0, 7)}</code>
+    ),
+  },
+  {
+    id: "subject",
+    header: "subject",
+    accessorFn: (h) => h.subject,
+    cell: (ctx) => (
+      <span className="kb-history-subj">{ctx.row.original.subject}</span>
+    ),
+  },
+  ...commitBylineColumns<CardHistoryEntry>(),
+];
+
+/** Source-repo commits naming this card. These shas link out to the forge. */
+const CODE_COMMIT_COLUMNS: DataTableColumn<ProjectCommit>[] = [
+  {
+    id: "sha",
+    accessorFn: (c) => c.sha,
+    cell: (ctx) => {
+      const c = ctx.row.original;
+      return c.url ? (
+        <a
+          className="kb-history-sha kb-linkish"
+          href={c.url}
+          target="_blank"
+          rel="noreferrer noopener"
+          title={c.sha}
+        >
+          {c.sha.slice(0, 7)}
+        </a>
+      ) : (
+        <code className="kb-history-sha" title={c.sha}>
+          {c.sha.slice(0, 7)}
+        </code>
+      );
+    },
+  },
+  {
+    id: "subject",
+    header: "subject",
+    accessorFn: (c) => c.subject,
+    cell: (ctx) => (
+      <span className="kb-history-subj">{ctx.row.original.subject}</span>
+    ),
+  },
+  ...commitBylineColumns<ProjectCommit>(),
+];
+
 function DetailPanel({
   card,
   boardId,
+  accent,
+  commits,
   onClose,
   onSave,
   busy,
 }: {
   card: BoardCard;
   boardId: string;
+  /** Board-resolved column accent for the modal stripe. */
+  accent?: string;
+  /** Source-repo commits whose subject names this card id. */
+  commits?: ProjectCommit[];
   onClose: () => void;
   onSave: (patch: {
     title?: string;
@@ -1078,19 +1204,30 @@ function DetailPanel({
     due?: string | null;
     labels?: string[];
     priority?: string | null;
+    checklist?: ChecklistItem[];
   }) => Promise<void>;
   busy: boolean;
 }) {
   const [title, setTitle] = useState(card.title);
   const [status, setStatusText] = useState(card.status ?? "");
+  const [checklist, setChecklist] = useState<ChecklistItem[]>(
+    card.checklist ?? [],
+  );
+  const [checkDraft, setCheckDraft] = useState("");
   const [assignee, setAssignee] = useState(card.assignee ?? "");
   const [due, setDue] = useState(card.due ?? "");
   const [priority, setPriority] = useState(card.priority ?? "");
   const [labels, setLabels] = useState((card.labels ?? []).join(", "));
   const [editStatus, setEditStatus] = useState(false);
-  const [history, setHistory] = useState<CardHistoryEntry[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+
+  // Boards-repo log for this card's file. Keyed on the ids, not the card
+  // object, so a background board refetch does not re-request it.
+  const historyQuery = useCardHistory(boardId, card.id);
+  const history = historyQuery.data?.entries ?? [];
+  // A failed read is indistinguishable from an empty log here, exactly as the
+  // hand-rolled `.catch(() => setHistory([]))` it replaces.
+  const historyLoading = historyQuery.isPending;
 
   useEffect(() => {
     setTitle(card.title);
@@ -1099,26 +1236,10 @@ function DetailPanel({
     setDue(card.due ?? "");
     setPriority(card.priority ?? "");
     setLabels((card.labels ?? []).join(", "));
+    setChecklist(card.checklist ?? []);
+    setCheckDraft("");
     setEditStatus(false);
   }, [card]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setHistoryLoading(true);
-    getCardHistory(boardId, card.id)
-      .then((r) => {
-        if (!cancelled) setHistory(r.entries);
-      })
-      .catch(() => {
-        if (!cancelled) setHistory([]);
-      })
-      .finally(() => {
-        if (!cancelled) setHistoryLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [boardId, card.id]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1129,13 +1250,6 @@ function DetailPanel({
   }, [onClose]);
 
   const statusHtml = useMemo(() => renderMarkdown(status), [status]);
-  const logHtml = useMemo(
-    () =>
-      (card.log ?? [])
-        .map((line) => `<li>${renderMarkdown(line)}</li>`)
-        .join(""),
-    [card.log],
-  );
 
   return (
     <div
@@ -1147,12 +1261,13 @@ function DetailPanel({
       }}
     >
       <div
-        className="kb-card-modal-dialog"
+        className="kb-card-modal-dialog kb-card-modal-dialog--striped"
         data-testid="card-detail"
         data-card-id={card.id}
         role="dialog"
         aria-modal="true"
         aria-labelledby="kb-card-modal-title"
+        style={{ ["--col-accent" as string]: accent ?? columnAccent(card.column) }}
       >
         <header className="kb-card-modal-head">
           <div className="kb-card-modal-head-main">
@@ -1201,9 +1316,9 @@ function DetailPanel({
 
         <div className="kb-card-modal-grid">
           <div className="kb-card-modal-main">
-            <div className="kb-field">
-              <div className="kb-field-row">
-                <span>Status</span>
+            <Field
+              label="Status"
+              action={
                 <button
                   type="button"
                   className="kb-linkish"
@@ -1212,13 +1327,15 @@ function DetailPanel({
                 >
                   {editStatus ? "Preview" : "Edit"}
                 </button>
-              </div>
+              }
+            >
               {editStatus ? (
-                <textarea
-                  data-testid="detail-status"
-                  rows={6}
+                <MarkdownEditor
+                  testId="detail-status"
+                  rows={8}
                   value={status}
-                  onChange={(e) => setStatusText(e.target.value)}
+                  onChange={setStatusText}
+                  placeholder="Describe the work… **bold**, `code`, - lists"
                 />
               ) : (
                 <div
@@ -1229,76 +1346,156 @@ function DetailPanel({
                   }}
                 />
               )}
-            </div>
-            <div className="kb-field" data-testid="detail-log">
-              <span>Log</span>
-              <ul
-                className="kb-md kb-log"
-                dangerouslySetInnerHTML={{
-                  __html: logHtml || "<li><em>No log entries</em></li>",
-                }}
-              />
-            </div>
-            <div className="kb-field" data-testid="detail-history">
-              <span>Git history</span>
-              {historyLoading ? (
-                <p className="kb-muted">Loading…</p>
-              ) : history.length === 0 ? (
-                <p className="kb-muted">No commits yet.</p>
-              ) : (
-                <ul className="kb-history-list">
-                  {history.map((h) => (
-                    <li key={h.sha} data-testid="history-entry">
-                      <code className="kb-history-sha">
-                        {h.sha.slice(0, 7)}
-                      </code>
-                      <span className="kb-history-subj">{h.subject}</span>
-                      <span className="kb-muted">
-                        {h.author} · {h.date.slice(0, 10)}
-                      </span>
+            </Field>
+            <Field
+              as="div"
+              testId="detail-checklist"
+              label="Checklist"
+              count={
+                <>
+                  {checklist.filter((i) => i.done).length}/{checklist.length}
+                </>
+              }
+            >
+              {checklist.length > 0 ? (
+                <ul className="kb-checklist">
+                  {checklist.map((item, idx) => (
+                    <li key={`${item.text}-${idx}`} className="kb-checklist-item">
+                      <label className="kb-checklist-label">
+                        <input
+                          type="checkbox"
+                          checked={item.done}
+                          data-testid={`checklist-toggle-${idx}`}
+                          onChange={() =>
+                            setChecklist((prev) =>
+                              prev.map((x, j) =>
+                                j === idx ? { ...x, done: !x.done } : x,
+                              ),
+                            )
+                          }
+                        />
+                        <span className={item.done ? "is-done" : undefined}>
+                          {item.text}
+                        </span>
+                      </label>
+                      <button
+                        type="button"
+                        className="kb-checklist-remove"
+                        aria-label={`Remove ${item.text}`}
+                        title="Remove"
+                        onClick={() =>
+                          setChecklist((prev) => prev.filter((_, j) => j !== idx))
+                        }
+                      >
+                        ✕
+                      </button>
                     </li>
                   ))}
                 </ul>
+              ) : null}
+              <div className="kb-checklist-add">
+                <input
+                  data-testid="checklist-new"
+                  value={checkDraft}
+                  placeholder="Add an item…"
+                  onChange={(e) => setCheckDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter") return;
+                    e.preventDefault();
+                    const text = checkDraft.trim();
+                    if (!text) return;
+                    setChecklist((prev) => [...prev, { text, done: false }]);
+                    setCheckDraft("");
+                  }}
+                />
+                <button
+                  type="button"
+                  data-testid="checklist-add"
+                  onClick={() => {
+                    const text = checkDraft.trim();
+                    if (!text) return;
+                    setChecklist((prev) => [...prev, { text, done: false }]);
+                    setCheckDraft("");
+                  }}
+                >
+                  add
+                </button>
+              </div>
+            </Field>
+            <Field as="div" testId="detail-log" label="Log">
+              <CardLog lines={card.log} actorColor={paletteFor} />
+            </Field>
+            <Field as="div" testId="detail-history" label="Git history">
+              {historyLoading ? (
+                <EmptyState>Loading…</EmptyState>
+              ) : history.length === 0 ? (
+                <EmptyState>No commits yet.</EmptyState>
+              ) : (
+                <DataTable
+                  data={history}
+                  columns={CARD_HISTORY_COLUMNS}
+                  listClassName="kb-history-list"
+                  getRowId={(h) => h.sha}
+                  rowTestId="history-entry"
+                  hiddenColumns={COMMIT_HIDDEN_COLUMNS}
+                  sortLabel="Sort card history"
+                />
               )}
-            </div>
+            </Field>
+            {/* Source-repo commits naming this card id. Distinct from "Git
+                history" above, which is the boards repo log for the card file. */}
+            {commits && commits.length > 0 ? (
+              <Field
+                as="div"
+                testId="detail-code-commits"
+                label="Code commits"
+                count={commits.length}
+              >
+                <DataTable
+                  data={commits}
+                  columns={CODE_COMMIT_COLUMNS}
+                  listClassName="kb-history-list"
+                  getRowId={(c) => c.sha}
+                  rowTestId="code-commit-entry"
+                  hiddenColumns={COMMIT_HIDDEN_COLUMNS}
+                  sortLabel="Sort code commits"
+                />
+              </Field>
+            ) : null}
           </div>
 
           <aside className="kb-card-modal-side">
-            <label className="kb-field">
-              Assignee
+            <Field label="Assignee">
               <input
                 data-testid="detail-assignee"
                 value={assignee}
                 onChange={(e) => setAssignee(e.target.value)}
               />
-            </label>
-            <label className="kb-field">
-              Due
+            </Field>
+            <Field label="Due">
               <input
                 data-testid="detail-due"
                 value={due}
                 onChange={(e) => setDue(e.target.value)}
                 placeholder="YYYY-MM-DD"
               />
-            </label>
-            <label className="kb-field">
-              Priority
+            </Field>
+            <Field label="Priority">
               <input
                 data-testid="detail-priority"
                 value={priority}
                 onChange={(e) => setPriority(e.target.value)}
                 placeholder="P1"
               />
-            </label>
-            <label className="kb-field">
-              Labels
+            </Field>
+            <Field label="Labels">
               <input
                 data-testid="detail-labels"
                 value={labels}
                 onChange={(e) => setLabels(e.target.value)}
                 placeholder="comma-separated"
               />
-            </label>
+            </Field>
             <button
               type="button"
               className="kb-panel-save"
@@ -1315,6 +1512,7 @@ function DetailPanel({
                     .split(",")
                     .map((s) => s.trim())
                     .filter(Boolean),
+                  checklist,
                 })
               }
             >
@@ -1327,16 +1525,91 @@ function DetailPanel({
   );
 }
 
+/** Card-modal commit join: deep enough to cover a card's whole life. */
+const CARD_COMMIT_LIMIT = 200;
+/** Project-history modal: the api default, kept explicit so it can be a key. */
+const PROJECT_HISTORY_LIMIT = 50;
+/** Activity feed page size (overrides both the api and server defaults). */
+const ACTIVITY_LIMIT = 80;
+/** Portfolio home shows a short digest; the server already caps the feed at 40. */
+const PORTFOLIO_ACTIVITY_LIMIT = 20;
+
+const NO_PR_STATUSES: Record<string, PrStatusResponse | null> = {};
+
+/** `String(e)` for a query error, `null` when the query is healthy. */
+function errorText(e: unknown): string | null {
+  return e == null ? null : String(e);
+}
+
+/*
+ * Settings' three disclosure lists are the one place where the table's columns
+ * are pure sort and filter keys: a row there is a single expandable <button>
+ * plus a form, not a stack of cells, so `renderRow` keeps the markup and these
+ * defs stay free of cell renderers. They close over nothing, so they live at
+ * module scope and never churn the row model.
+ *
+ * A column earns a `header` when sorting by it is meaningful. The rest —
+ * credential ids, remote URLs — exist so the search box can find a board by
+ * them, which is how you locate one board among twenty.
+ */
+const WORKSPACE_BOARD_COLUMNS: DataTableColumn<WorkspaceBoard>[] = [
+  { id: "name", header: "name", accessorFn: (b) => b.label || b.boardId },
+  {
+    id: "cards",
+    header: "cards",
+    accessorFn: (b) => b.cardCount,
+    sortDescFirst: true,
+  },
+  { id: "dir", header: "dir", accessorFn: (b) => b.boardDir },
+  { id: "repo", header: "repo", accessorFn: (b) => b.remoteUrl ?? b.localPath },
+  { id: "credential", accessorFn: (b) => b.resolvedCredentialId ?? "" },
+];
+
+const WORKSPACE_CONNECTION_COLUMNS: DataTableColumn<WorkspaceConnection>[] = [
+  { id: "label", header: "label", accessorFn: (r) => r.label },
+  {
+    id: "boards",
+    header: "boards",
+    accessorFn: (r) => r.boardCount,
+    sortDescFirst: true,
+  },
+  { id: "remote", accessorFn: (r) => r.remoteUrl ?? r.localPath },
+];
+
+const WORKSPACE_CREDENTIAL_COLUMNS: DataTableColumn<WorkspaceCredential>[] = [
+  { id: "label", header: "label", accessorFn: (c) => c.label },
+  { id: "username", header: "username", accessorFn: (c) => c.username },
+  {
+    id: "updated",
+    header: "updated",
+    accessorFn: (c) => c.updatedAt,
+    sortDescFirst: true,
+  },
+  { id: "id", accessorFn: (c) => c.id },
+];
+
 export function BoardApp() {
-  const [boards, setBoards] = useState<BoardSummary[]>([]);
+  const queryClient = useQueryClient();
+  const inv = useInvalidators();
+  /**
+   * Routing. `readAppRoute` parses the router's location with packages/core's
+   * `parseAppRoute`; `navigateTo` writes `formatAppPath`'s string back through
+   * the router's history. Both are imperative on purpose — the app tracks the
+   * route in its own state, so subscribing to the location here would re-render
+   * the whole tree on every self-issued URL sync. See routes.tsx.
+   */
+  const readAppRoute = useAppRouteReader();
+  const navigateTo = useNavigateTo();
+
   const [boardId, setBoardId] = useState<string | null>(null);
-  const [board, setBoard] = useState<BoardDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  /**
+   * Errors this component raises itself (mutations, deep-link misses). Query
+   * failures are folded in below rather than copied into state, so a successful
+   * refetch clears them without anyone remembering to.
+   */
+  const [localError, setLocalError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string>("");
-  const [sync, setSync] = useState<SyncState | null>(null);
-  const [addTitle, setAddTitle] = useState("");
-  const [addColumn, setAddColumn] = useState<string>("");
   const [selected, setSelected] = useState<BoardCard | null>(null);
   const [filterQuery, setFilterQuery] = useState("");
   const [filterLabel, setFilterLabel] = useState("");
@@ -1345,29 +1618,21 @@ export function BoardApp() {
   const [themePref, setThemePref] = useState<ThemePreference>(() =>
     typeof document !== "undefined" ? readThemePreference() : "system",
   );
-  const [showActivity, setShowActivity] = useState(false);
-  const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [showNotes, setShowNotes] = useState(false);
-  const [notesBody, setNotesBody] = useState("");
-  const [notesBusy, setNotesBusy] = useState(false);
+  /** `null` means "show whatever the server last handed us". */
+  const [notesDraft, setNotesDraft] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const [historyCommits, setHistoryCommits] = useState<ProjectCommit[]>([]);
-  const [historyMeta, setHistoryMeta] = useState<{
-    bound: boolean;
-    error: string | null;
-    codePath: string | null;
-  } | null>(null);
-  const [historyBusy, setHistoryBusy] = useState(false);
-  const [codePathDraft, setCodePathDraft] = useState("");
-  const [codeRemoteDraft, setCodeRemoteDraft] = useState("");
+  const [codePathDraft, setCodePathDraft] = useState<string | null>(null);
+  const [codeRemoteDraft, setCodeRemoteDraft] = useState<string | null>(null);
+  const [codeCredentialDraft, setCodeCredentialDraft] = useState<string | null>(null);
+  const [codeWatchDraft, setCodeWatchDraft] = useState<boolean | null>(null);
   const [codeTokenDraft, setCodeTokenDraft] = useState("");
   const [showPortfolio, setShowPortfolio] = useState(false);
-  const [portfolio, setPortfolio] = useState<PortfolioResponse | null>(null);
-  const [fleet, setFleet] = useState<FleetHealthResponse | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showAlerts, setShowAlerts] = useState(false);
+  const [ackedAlerts, setAckedAlerts] = useState<Set<string>>(readAckedAlerts);
   const [settingsNav, setSettingsNav] = useState<SettingsSection>("boards");
   const [boardMenuOpen, setBoardMenuOpen] = useState(false);
-  const [workspace, setWorkspace] = useState<WorkspaceSnapshot | null>(null);
   const [expandedBoardKey, setExpandedBoardKey] = useState<string | null>(null);
   const [expandedConnectionId, setExpandedConnectionId] = useState<string | null>(
     null,
@@ -1395,140 +1660,259 @@ export function BoardApp() {
   const [browserOnline, setBrowserOnline] = useState(
     typeof navigator === "undefined" ? true : navigator.onLine,
   );
-  const [conflicts, setConflicts] = useState<ConflictItem[]>([]);
-  const [prStatuses, setPrStatuses] = useState<
-    Record<string, PrStatusResponse | null>
-  >({});
   const [credToken, setCredToken] = useState("");
   const [credUser, setCredUser] = useState("x-access-token");
-  const [credBusy, setCredBusy] = useState(false);
-  const [needsConnect, setNeedsConnect] = useState(false);
   const [connectUrl, setConnectUrl] = useState("");
   const [connectPath, setConnectPath] = useState("");
   const [connectToken, setConnectToken] = useState("");
-  const [connectBusy, setConnectBusy] = useState(false);
-  const [pendingCardId, setPendingCardId] = useState<string | null>(null);
-  const [remotes, setRemotes] = useState<RemoteSummary[]>([]);
+  /**
+   * Card the URL asked for before its board had loaded. A ref, not state: it is
+   * only ever written just before a reload and read inside it, and as state it
+   * would churn `reload`'s identity for every consumer downstream.
+   */
+  const pendingCardIdRef = useRef<string | null>(null);
   const [remoteSlug, setRemoteSlug] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [showHelp, setShowHelp] = useState(false);
 
-  const refreshSync = useCallback(async () => {
-    try {
-      setSync(await getSync());
-    } catch {
-      /* ignore */
-    }
-  }, []);
+  // ---- reads -------------------------------------------------------------
 
-  const refreshConflicts = useCallback(async () => {
-    try {
-      const r = await listConflicts();
-      setConflicts(r.conflicts);
-    } catch {
-      setConflicts([]);
-    }
-  }, []);
+  const boardsQ = useBoards();
+  const boards = boardsQ.data?.boards ?? [];
+  /** Only a *successful* empty list means "no repo"; a pending one means "wait". */
+  const needsConnect = boardsQ.isSuccess && boards.length === 0;
 
-  const refreshRemotes = useCallback(async () => {
-    try {
-      const r = await listRemotes();
-      setRemotes(r.remotes);
-      if (r.active) setRemoteSlug(r.active);
-    } catch {
-      /* ignore when not connected */
-    }
-  }, []);
+  const boardQ = useBoard(boardId);
+  // A failed board read blanks the grid, the way the old `setBoard(null)` in
+  // reload's catch did — otherwise the error page would render over stale cards.
+  const board = boardId && !boardQ.isError ? (boardQ.data ?? null) : null;
 
-  const reload = useCallback(async (id?: string) => {
-    setError(null);
-    await refreshRemotes();
-    const list = await listBoards();
-    setBoards(list.boards);
-    if (list.boards.length === 0) {
-      setNeedsConnect(true);
-      setBoard(null);
-      setBoardId(null);
-      await refreshSync();
-      return;
-    }
-    setNeedsConnect(false);
-    const route =
-      typeof window !== "undefined"
-        ? readWindowAppRoute()
-        : ({ kind: "home" } as const);
-    if (route.kind === "settings") {
-      setShowSettings(true);
-      setSettingsNav(route.section);
-      if (route.boardId) {
-        setExpandedBoardKey(
-          route.remoteSlug
-            ? `${route.remoteSlug}::${route.boardId}`
-            : route.boardId,
-        );
-      }
-    }
-    if (route.kind === "board" && route.remoteSlug) {
-      setRemoteSlug(route.remoteSlug);
-    }
-    const routeBoardId =
-      route.kind === "board"
-        ? route.boardId
-        : route.kind === "settings"
-          ? route.boardId
-          : null;
-    const routeCardId = route.kind === "board" ? route.cardId : null;
-    // Explicit id wins; else deep-linked board; home → portfolio (no auto-open first board)
-    let target: string | null;
-    if (id !== undefined) {
-      target = id;
-    } else if (routeBoardId) {
-      target = routeBoardId;
-    } else if (route.kind === "home") {
-      target = null;
-    } else {
-      target = boardId;
-    }
-    setBoardId(target);
-    if (target) {
-      setShowPortfolio(false);
+  // Note there is no remotes observer: nothing renders that list (the settings
+  // pane reads connections off the workspace snapshot), so `reload` fetches it
+  // straight into the cache in route order to pick up the active clone.
+
+  const syncQ = useSync();
+  const sync = syncQ.data ?? null;
+
+  // Portfolio and fleet stay bound to the Projects screen, but their data
+  // survives navigating away — which is what keeps the alert bell populated on
+  // a board view after the portfolio has been visited once.
+  const portfolioQ = usePortfolio(showPortfolio);
+  const portfolio = portfolioQ.data ?? null;
+  const fleetQ = useFleetHealth(showPortfolio);
+  const fleet = fleetQ.data ?? null;
+
+  const frozen = Boolean(
+    sync?.frozen || sync?.errorKind === "conflict" || sync?.status === "frozen",
+  );
+  const conflictsQ = useConflicts(frozen);
+  const conflicts = conflictsQ.data?.conflicts ?? [];
+
+  const workspaceQ = useWorkspace(showSettings);
+  const workspace = workspaceQ.data ?? null;
+  // Hoisted so the `?? []` fallback keeps one identity across renders — a fresh
+  // empty array on every pass would rebuild each settings table's row model.
+  const workspaceBoards = useMemo(
+    () => workspace?.boards ?? [],
+    [workspace?.boards],
+  );
+  const workspaceConnections = useMemo(
+    () => workspace?.connections ?? [],
+    [workspace?.connections],
+  );
+  const workspaceCredentials = useMemo(
+    () => workspace?.credentials ?? [],
+    [workspace?.credentials],
+  );
+
+  const showActivity = showSettings && settingsNav === "activity";
+  const activityQ = useActivity(boardId, ACTIVITY_LIMIT, showActivity);
+  const activity = activityQ.data?.entries ?? [];
+
+  // Keyed on the ref list itself: a board refetch that changes nothing about
+  // the PRs neither restarts the 60s poll nor fires a request.
+  const prRefs = useMemo(() => prRefsFromCards(board?.cards), [board?.cards]);
+  const prStatusesQ = usePrStatuses(prRefs);
+  const prStatuses = prStatusesQ.data ?? NO_PR_STATUSES;
+
+  const notesQ = useBoardNotes(boardId, showNotes);
+  const notesBody = notesDraft ?? notesQ.data?.body ?? "";
+
+  const projectHistoryQ = useCodeHistory(
+    boardId,
+    PROJECT_HISTORY_LIMIT,
+    showHistory,
+  );
+  const projectHistory = projectHistoryQ.data ?? null;
+  const historyCommits = projectHistory?.commits ?? [];
+  const codePath =
+    codePathDraft ?? projectHistory?.binding?.path ?? projectHistory?.codePath ?? "";
+  const codeRemote = codeRemoteDraft ?? projectHistory?.binding?.remote ?? "";
+  const codeCredentialId =
+    codeCredentialDraft ?? projectHistory?.binding?.credentialId ?? "";
+  const codeWatch = codeWatchDraft ?? projectHistory?.binding?.watch ?? false;
+
+  /**
+   * The whole app's error line. Query failures are read, not copied: a
+   * successful refetch clears them on its own. The panel-scoped reads only
+   * report while their panel is on screen, so a stale failure cannot keep the
+   * banner up after the modal that caused it has been closed.
+   */
+  const error =
+    localError ??
+    errorText(boardQ.error) ??
+    errorText(boardsQ.error) ??
+    (showActivity ? errorText(activityQ.error) : null) ??
+    (showHistory ? errorText(projectHistoryQ.error) : null);
+
+  // ---- writes ------------------------------------------------------------
+  // `mutateAsync` is bound once by the observer, so these are stable across
+  // renders and safe to name as callback dependencies.
+
+  const { mutateAsync: moveCardAsync } = useMoveCard();
+  const { mutateAsync: createCardAsync } = useCreateCard();
+  const { mutateAsync: addColumnAsync } = useAddColumn();
+  const { mutateAsync: renameColumnAsync } = useRenameColumn();
+  const { mutateAsync: reorderColumnsAsync } = useReorderColumns();
+  const { mutateAsync: deleteColumnAsync } = useDeleteColumn();
+  const { mutateAsync: updateCardAsync } = useUpdateCard();
+  const { mutateAsync: archiveCardsAsync } = useArchiveCards();
+  const { mutateAsync: remapColumnAsync } = useRemapColumn();
+  const { mutateAsync: pullRemoteAsync } = usePullRemote();
+  const { mutateAsync: retrySyncAsync } = useRetrySync();
+  const { mutateAsync: clearSyncFreezeAsync } = useClearSyncFreeze();
+  const { mutateAsync: resolveConflictAsync } = useResolveConflict();
+  const { mutateAsync: setCredentialsAsync, isPending: credBusy } =
+    useSetCredentials();
+  const { mutateAsync: connectRepoAsync, isPending: connectBusy } =
+    useConnectRepo();
+  const { mutateAsync: createBoardAsync } = useCreateBoard();
+  const { mutateAsync: patchBoardBindingAsync } = usePatchBoardBinding();
+  const { mutateAsync: patchConnectionAsync } = usePatchConnection();
+  const { mutateAsync: upsertCredentialAsync } = useUpsertCredentialBook();
+  const { mutateAsync: deleteCredentialAsync } = useDeleteCredentialBook();
+  const { mutateAsync: setActiveRemoteAsync } = useSetActiveRemote();
+  const { mutateAsync: putBoardNotesAsync, isPending: notesSaving } =
+    usePutBoardNotes();
+  const { mutateAsync: bindCodeSourceAsync, isPending: bindingCodeSource } =
+    useBindCodeSource();
+  const { mutate: refreshNow, isPending: refreshing } = useRefreshRepo();
+
+  // Saved credentials, so a board can point at one instead of re-pasting a PAT.
+  const credentialBookQ = useQuery({
+    ...credentialBookQuery(),
+    enabled: showHistory,
+  });
+  const credentialBook = credentialBookQ.data?.credentials ?? [];
+
+  const notesBusy = notesQ.isFetching || notesSaving;
+  const historyBusy =
+    (showHistory && (projectHistoryQ.isPending || projectHistoryQ.isFetching)) ||
+    bindingCodeSource;
+
+  /**
+   * Apply the URL to component state, then pull every read the new view needs.
+   *
+   * This is deliberately still imperative. It is not a data fetch — it is the
+   * router: it decides which board is open, whether Settings is showing and
+   * which card a deep link wants, and those decisions have to happen in order.
+   * The fetches go through `fetchQuery` so they land in the same cache the
+   * components observe; nothing is fetched twice.
+   */
+  const reload = useCallback(
+    async (id?: string) => {
+      setLocalError(null);
       try {
-        const detail = await getBoard(target);
-        setBoard(detail);
-        if (!addColumn && detail.columns[0]) {
-          // Prefer Ready for new-card column when present (agent pickup lane)
-          const ready = detail.columns.find((c) => c.id === "ready");
-          setAddColumn(ready?.id ?? detail.columns[0].id);
-        }
-        const wantCard = pendingCardId ?? routeCardId;
-        if (wantCard) {
-          const found = detail.cards.find((c) => c.id === wantCard);
-          if (found) {
-            setSelected(found);
-            setFocusedCardId(found.id);
-          } else if (routeCardId) {
-            setError(`Card not found: ${routeCardId}`);
-          }
-          setPendingCardId(null);
-        }
-      } catch (e) {
-        setBoard(null);
-        setError(String(e));
-      }
-    } else {
-      setBoard(null);
-      setShowPortfolio(true);
-      try {
-        const [p, f] = await Promise.all([getPortfolio(), getFleetHealth()]);
-        setPortfolio(p);
-        setFleet(f);
+        const r = await queryClient.fetchQuery({
+          ...remotesQuery(),
+          staleTime: 0,
+        });
+        if (r.active) setRemoteSlug(r.active);
       } catch {
-        setPortfolio(null);
-        setFleet(null);
+        /* ignore when not connected */
       }
-    }
-    await refreshSync();
-  }, [boardId, addColumn, refreshSync, pendingCardId, refreshRemotes]);
+      const list = await queryClient.fetchQuery({
+        ...boardsQuery(),
+        staleTime: 0,
+      });
+      if (list.boards.length === 0) {
+        setBoardId(null);
+        await queryClient.fetchQuery({ ...syncQuery(), staleTime: 0 });
+        return;
+      }
+      // Re-read the location rather than closing over it: `reload` is also the
+      // SSE handler, and that call site is pinned to the mount-time closure.
+      const route = readAppRoute();
+      if (route.kind === "settings") {
+        setShowSettings(true);
+        setSettingsNav(route.section);
+        if (route.boardId) {
+          setExpandedBoardKey(
+            route.remoteSlug
+              ? `${route.remoteSlug}::${route.boardId}`
+              : route.boardId,
+          );
+        }
+      }
+      if (route.kind === "board" && route.remoteSlug) {
+        setRemoteSlug(route.remoteSlug);
+      }
+      const routeBoardId =
+        route.kind === "board"
+          ? route.boardId
+          : route.kind === "settings"
+            ? route.boardId
+            : null;
+      const routeCardId = route.kind === "board" ? route.cardId : null;
+      // Explicit id wins; else deep-linked board; home → portfolio (no auto-open first board)
+      let target: string | null;
+      if (id !== undefined) {
+        target = id;
+      } else if (routeBoardId) {
+        target = routeBoardId;
+      } else if (route.kind === "home") {
+        target = null;
+      } else {
+        target = boardId;
+      }
+      setBoardId(target);
+      if (target) {
+        setShowPortfolio(false);
+        try {
+          const detail = await queryClient.fetchQuery({
+            ...boardQuery(target),
+            staleTime: 0,
+          });
+          const wantCard = pendingCardIdRef.current ?? routeCardId;
+          if (wantCard) {
+            const found = detail.cards.find((c) => c.id === wantCard);
+            if (found) {
+              setSelected(found);
+              setFocusedCardId(found.id);
+            } else if (routeCardId) {
+              setLocalError(`Card not found: ${routeCardId}`);
+            }
+            pendingCardIdRef.current = null;
+          }
+        } catch (e) {
+          setLocalError(String(e));
+        }
+      } else {
+        setShowPortfolio(true);
+        try {
+          await Promise.all([
+            queryClient.fetchQuery({ ...portfolioQuery(), staleTime: 0 }),
+            queryClient.fetchQuery({ ...fleetHealthQuery(), staleTime: 0 }),
+          ]);
+        } catch {
+          // Supplementary screen: a failed roll-up leaves an empty grid rather
+          // than replacing the whole app with an error page.
+        }
+      }
+      await queryClient.fetchQuery({ ...syncQuery(), staleTime: 0 });
+    },
+    [boardId, queryClient, readAppRoute],
+  );
 
   useEffect(() => {
     applyTheme(themePref);
@@ -1540,30 +1924,29 @@ export function BoardApp() {
   }, [themePref]);
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const r = readWindowAppRoute();
-      if (r.kind === "settings") {
-        setShowSettings(true);
-        setSettingsNav(r.section);
-        if (r.boardId) {
-          setExpandedBoardKey(
-            r.remoteSlug ? `${r.remoteSlug}::${r.boardId}` : r.boardId,
-          );
-        }
-      }
-      if (r.kind === "board") {
-        if (r.boardId) setBoardId(r.boardId);
-        if (r.cardId) setPendingCardId(r.cardId);
-        if (r.remoteSlug) setRemoteSlug(r.remoteSlug);
+    const r = readAppRoute();
+    if (r.kind === "settings") {
+      setShowSettings(true);
+      setSettingsNav(r.section);
+      if (r.boardId) {
+        setExpandedBoardKey(
+          r.remoteSlug ? `${r.remoteSlug}::${r.boardId}` : r.boardId,
+        );
       }
     }
-    reload().catch((e) => setError(String(e)));
+    if (r.kind === "board") {
+      if (r.boardId) setBoardId(r.boardId);
+      if (r.cardId) pendingCardIdRef.current = r.cardId;
+      if (r.remoteSlug) setRemoteSlug(r.remoteSlug);
+    }
+    reload().catch((e) => setLocalError(String(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Keep URL in sync: board/card OR settings sections
+  // Keep URL in sync: board/card OR settings sections. Always `replace`, so
+  // switching boards, opening a card and changing settings section stay off the
+  // history stack exactly as they did before the router landed.
   useEffect(() => {
-    if (typeof window === "undefined") return;
     if (showSettings) {
       let settingsBoardId: string | null = null;
       let settingsRemote: string | null = null;
@@ -1575,7 +1958,7 @@ export function BoardApp() {
         settingsBoardId = expandedBoardKey;
         settingsRemote = remoteSlug;
       }
-      writeWindowAppRoute(
+      navigateTo(
         {
           kind: "settings",
           section: settingsNav,
@@ -1586,8 +1969,11 @@ export function BoardApp() {
       );
       return;
     }
+    // Deliberate: with no board open (portfolio/home) the URL is left alone, so
+    // closing Settings from the portfolio keeps the /settings/... path on screen.
+    // `openPortfolio` is the only path that forces it back to "/".
     if (!boardId) return;
-    writeWindowAppRoute(
+    navigateTo(
       {
         kind: "board",
         boardId,
@@ -1603,82 +1989,69 @@ export function BoardApp() {
     showSettings,
     settingsNav,
     expandedBoardKey,
+    navigateTo,
   ]);
 
-  // Browser back/forward
-  useEffect(() => {
-    const applyRoute = () => {
-      const r = readWindowAppRoute();
-      if (r.kind === "settings") {
-        setShowSettings(true);
-        setSettingsNav(r.section);
-        if (r.boardId) {
-          setExpandedBoardKey(
-            r.remoteSlug ? `${r.remoteSlug}::${r.boardId}` : r.boardId,
-          );
-        } else {
-          setExpandedBoardKey(null);
-        }
-        return;
+  /**
+   * Browser back/forward.
+   *
+   * `usePopNavigation` fires for BACK / FORWARD / GO only, which is the same
+   * set the old `popstate` listener saw — the app's own URL writes all go
+   * through `replace`, and `replaceState` never emitted popstate. The old
+   * `hashchange` listener is gone with it: the only runtime hash change in the
+   * app is the `#kb-main-board` skip link, which parses to home, falls through
+   * to the pathname (nav.ts:280-284) and re-applies the route the app is
+   * already showing.
+   */
+  usePopNavigation((r: AppRoute) => {
+    if (r.kind === "settings") {
+      setShowSettings(true);
+      setSettingsNav(r.section);
+      if (r.boardId) {
+        setExpandedBoardKey(
+          r.remoteSlug ? `${r.remoteSlug}::${r.boardId}` : r.boardId,
+        );
+      } else {
+        setExpandedBoardKey(null);
       }
-      setShowSettings(false);
-      if (r.kind !== "board") return;
-      const switchRemoteIfNeeded = async () => {
-        if (r.remoteSlug && r.remoteSlug !== remoteSlug) {
-          await setActiveRemote(r.remoteSlug);
-          setRemoteSlug(r.remoteSlug);
+      return;
+    }
+    setShowSettings(false);
+    if (r.kind !== "board") return;
+    const switchRemoteIfNeeded = async () => {
+      if (r.remoteSlug && r.remoteSlug !== remoteSlug) {
+        await setActiveRemoteAsync(r.remoteSlug);
+        setRemoteSlug(r.remoteSlug);
+      }
+    };
+    void switchRemoteIfNeeded()
+      .then(() => {
+        if (r.boardId && r.boardId !== boardId) {
+          if (r.cardId) pendingCardIdRef.current = r.cardId;
+          return reload(r.boardId);
         }
-      };
-      void switchRemoteIfNeeded()
-        .then(() => {
-          if (r.boardId && r.boardId !== boardId) {
-            if (r.cardId) setPendingCardId(r.cardId);
-            return reload(r.boardId);
+        if (r.cardId && board) {
+          const found = board.cards.find((c) => c.id === r.cardId);
+          if (found) {
+            setSelected(found);
+            setFocusedCardId(found.id);
+          } else {
+            setLocalError(`Card not found: ${r.cardId}`);
           }
-          if (r.cardId && board) {
-            const found = board.cards.find((c) => c.id === r.cardId);
-            if (found) {
-              setSelected(found);
-              setFocusedCardId(found.id);
-            } else {
-              setError(`Card not found: ${r.cardId}`);
-            }
-          } else if (!r.cardId) {
-            setSelected(null);
-          }
-        })
-        .catch((e) => setError(String(e)));
-    };
-    window.addEventListener("popstate", applyRoute);
-    window.addEventListener("hashchange", applyRoute);
-    return () => {
-      window.removeEventListener("popstate", applyRoute);
-      window.removeEventListener("hashchange", applyRoute);
-    };
-  }, [boardId, board, reload, remoteSlug]);
-  useEffect(() => {
-    if (!showActivity || !boardId) return;
-    getActivity(boardId, 80)
-      .then((r) => setActivity(r.entries))
-      .catch((e) => setError(String(e)));
-  }, [showActivity, boardId, board?.cards]);
-
-  // Poll sync indicator (push queue) lightly
-  useEffect(() => {
-    const t = setInterval(() => {
-      refreshSync().catch(() => undefined);
-    }, 1500);
-    return () => clearInterval(t);
-  }, [refreshSync]);
+        } else if (!r.cardId) {
+          setSelected(null);
+        }
+      })
+      .catch((e) => setLocalError(String(e)));
+  });
 
   // Browser online/offline — auto-drain push queue when back online
   useEffect(() => {
     const on = () => {
       setBrowserOnline(true);
       // Auto-drain pending remote pushes on reconnect
-      retrySync()
+      retrySyncAsync()
         .then((s) => {
-          setSync(s);
           if (s.pendingCount === 0 && s.status === "synced") {
             setStatus("Push queue drained after reconnect");
           }
@@ -1692,48 +2065,21 @@ export function BoardApp() {
       window.removeEventListener("online", on);
       window.removeEventListener("offline", off);
     };
-  }, []);
+  }, [retrySyncAsync]);
 
-  // Load conflict list when frozen / conflict error
-  useEffect(() => {
-    if (sync?.frozen || sync?.errorKind === "conflict" || sync?.status === "frozen") {
-      refreshConflicts().catch(() => undefined);
-    }
-  }, [sync?.frozen, sync?.errorKind, sync?.status, refreshConflicts]);
-
-  // Live PR status poll for cards with pr: (not per-render network)
-  useEffect(() => {
-    const refs = [
-      ...new Set(
-        (board?.cards ?? [])
-          .map((c) => c.pr)
-          .filter((p): p is string => Boolean(p)),
-      ),
-    ];
-    if (refs.length === 0) {
-      setPrStatuses({});
-      return;
-    }
-    let stopped = false;
-    const tick = () => {
-      getPrStatuses(refs)
-        .then((m) => {
-          if (!stopped) setPrStatuses(m);
-        })
-        .catch(() => undefined);
-    };
-    tick();
-    const id = setInterval(tick, 60_000);
-    return () => {
-      stopped = true;
-      clearInterval(id);
-    };
-  }, [board?.cards]);
-
-  // Live updates: SSE from server poll + local writes → reload board
+  /**
+   * Live updates. The server pushes a `board` event whenever the repo sha
+   * moves — from its own poll or from someone else's write — and every
+   * board-derived read is stale at that moment.
+   *
+   * This used to call `reload()` from a `deps: []` effect, which pinned it to
+   * the first-render closure and silently reset state the user had since
+   * changed. Invalidation has no closure to go stale: `inv` is memoised on the
+   * query client, so the subscription is opened once and stays correct.
+   */
   useEffect(() => {
     let lastSha = "";
-    const unsub = subscribeBoardEvents((ev) => {
+    return subscribeBoardEvents((ev) => {
       if (ev.reason === "hello") {
         lastSha = ev.sha;
         return;
@@ -1741,12 +2087,10 @@ export function BoardApp() {
       if (ev.sha && ev.sha !== lastSha) {
         lastSha = ev.sha;
         setStatus(ev.reason === "poll" ? "Updated from git…" : "Board updated");
-        reload().catch((e) => setError(String(e)));
+        void inv.live();
       }
     });
-    return unsub;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [inv]);
 
   const onDropCard = useCallback(
     async (cardId: string, toColumn: string, index: number) => {
@@ -1774,119 +2118,102 @@ export function BoardApp() {
         index,
       );
 
-      // Optimistic: paint move at 0ms, then local commit via API
-      setBoard(applyOptimisticMove(board, cardId, payload.column, payload.order));
+      // Optimistic: paint the move at 0ms straight into the cache the grid
+      // reads from. The mutation reconciles (or reverts) by invalidating.
+      queryClient.setQueryData<BoardDetail>(qk.board(boardId), (prev) =>
+        prev
+          ? applyOptimisticMove(prev, cardId, payload.column, payload.order)
+          : prev,
+      );
       setStatus((s) =>
         s.startsWith("⚠") ? s : `Moved ${cardId} → ${toColumn}`,
       );
       setBusy(true);
       try {
-        const res = await moveCard(boardId, cardId, payload);
-        if (res && typeof res === "object" && "sync" in res && res.sync) {
-          setSync(res.sync as SyncState);
-        } else {
-          await refreshSync();
-        }
-        // Reconcile with server
-        await reload(boardId);
+        await moveCardAsync({ boardId, cardId, payload });
       } catch (e) {
-        setError(String(e));
+        setLocalError(String(e));
         setStatus("Move failed");
-        await reload(boardId);
       } finally {
         setBusy(false);
       }
     },
-    [board, boardId, reload, refreshSync],
+    [board, boardId, queryClient, moveCardAsync],
   );
 
   const createInColumn = useCallback(
     async (column: string, title: string) => {
       if (!boardId || !title.trim() || !board) return;
       setBusy(true);
-      setError(null);
+      setLocalError(null);
       try {
-        setBoard(
-          applyOptimisticCreate(board, {
-            id: `tmp-${Date.now()}`,
-            title: title.trim(),
-            column,
-            order: "z",
-            status: "_Not started._",
-            labels: [],
-          }),
+        queryClient.setQueryData<BoardDetail>(qk.board(boardId), (prev) =>
+          prev
+            ? applyOptimisticCreate(prev, {
+                id: `tmp-${Date.now()}`,
+                title: title.trim(),
+                column,
+                order: "z",
+                status: "_Not started._",
+                labels: [],
+              })
+            : prev,
         );
-        const res = await createCard(boardId, title.trim(), column);
-        if (res && typeof res === "object" && "sync" in res && (res as { sync?: SyncState }).sync) {
-          setSync((res as { sync: SyncState }).sync);
-        }
+        await createCardAsync({ boardId, title: title.trim(), column });
         setStatus(`Created in ${column}`);
-        await reload(boardId);
       } catch (e) {
-        setError(String(e));
-        await reload(boardId);
+        setLocalError(String(e));
       } finally {
         setBusy(false);
       }
     },
-    [boardId, board, reload],
+    [boardId, board, queryClient, createCardAsync],
   );
-
-  const onCreate = useCallback(async () => {
-    if (!addTitle.trim() || !addColumn) return;
-    const title = addTitle.trim();
-    setAddTitle("");
-    await createInColumn(addColumn, title);
-  }, [addTitle, addColumn, createInColumn]);
 
   const onAddList = useCallback(
     async (name: string) => {
       if (!boardId) return;
       setBusy(true);
-      setError(null);
+      setLocalError(null);
       try {
-        const res = await addColumn(boardId, name);
-        if (res.sync) setSync(res.sync);
+        const res = await addColumnAsync({ boardId, name });
         setStatus(`Added list “${res.column.name}”`);
-        await reload(boardId);
       } catch (e) {
-        setError(String(e));
+        setLocalError(String(e));
         throw e;
       } finally {
         setBusy(false);
       }
     },
-    [boardId, reload],
+    [boardId, addColumnAsync],
   );
 
   const onRenameList = useCallback(
     async (columnId: string, name: string) => {
       if (!boardId) return;
       setBusy(true);
-      setError(null);
+      setLocalError(null);
       try {
-        const res = await renameColumn(boardId, columnId, name);
-        if (res.sync) setSync(res.sync);
+        const res = await renameColumnAsync({ boardId, columnId, name });
         setStatus(`Renamed list to “${res.column.name}”`);
-        await reload(boardId);
       } catch (e) {
-        setError(String(e));
+        setLocalError(String(e));
         throw e;
       } finally {
         setBusy(false);
       }
     },
-    [boardId, reload],
+    [boardId, renameColumnAsync],
   );
 
   const applyColumnOrder = useCallback(
     async (next: string[]) => {
       if (!boardId) return;
       setBusy(true);
-      setError(null);
+      setLocalError(null);
       try {
         // Optimistic local order for snappy UI
-        setBoard((prev) => {
+        queryClient.setQueryData<BoardDetail>(qk.board(boardId), (prev) => {
           if (!prev) return prev;
           const byId = new Map(prev.columns.map((c) => [c.id, c]));
           const columns = next
@@ -1895,24 +2222,22 @@ export function BoardApp() {
           if (columns.length !== prev.columns.length) return prev;
           return { ...prev, columns };
         });
-        const res = await reorderColumns(boardId, next);
-        if (res.sync) setSync(res.sync);
+        // When the server echoes the authoritative order the mutation skips the
+        // board refetch, so the optimistic columns below are not clobbered.
+        const res = await reorderColumnsAsync({ boardId, order: next });
         setStatus("Reordered lists");
         if (res.columns?.length) {
-          setBoard((prev) =>
+          queryClient.setQueryData<BoardDetail>(qk.board(boardId), (prev) =>
             prev ? { ...prev, columns: res.columns } : prev,
           );
-        } else {
-          await reload(boardId);
         }
       } catch (e) {
-        setError(String(e));
-        await reload(boardId);
+        setLocalError(String(e));
       } finally {
         setBusy(false);
       }
     },
-    [boardId, reload],
+    [boardId, queryClient, reorderColumnsAsync],
   );
 
   const onMoveList = useCallback(
@@ -1962,10 +2287,9 @@ export function BoardApp() {
     async (columnId: string, moveTo?: string) => {
       if (!boardId) return;
       setBusy(true);
-      setError(null);
+      setLocalError(null);
       try {
-        const res = await deleteColumn(boardId, columnId, moveTo);
-        if (res.sync) setSync(res.sync);
+        const res = await deleteColumnAsync({ boardId, columnId, moveTo });
         const extra =
           res.archived && res.archived > 0
             ? ` (archived ${res.archived})`
@@ -1973,33 +2297,14 @@ export function BoardApp() {
               ? ` (moved ${res.moved})`
               : "";
         setStatus(`Deleted list ${columnId}${extra}`);
-        await reload(boardId);
       } catch (e) {
-        setError(String(e));
+        setLocalError(String(e));
       } finally {
         setBusy(false);
       }
     },
-    [boardId, reload],
+    [boardId, deleteColumnAsync],
   );
-
-  const refreshWorkspace = useCallback(async () => {
-    try {
-      setWorkspace(await getWorkspace());
-    } catch {
-      /* ignore when offline */
-    }
-  }, []);
-
-  useEffect(() => {
-    if (showSettings) void refreshWorkspace();
-  }, [showSettings, refreshWorkspace, remotes, boards]);
-
-  useEffect(() => {
-    if (showSettings && settingsNav === "activity") {
-      setShowActivity(true);
-    }
-  }, [showSettings, settingsNav]);
 
   const onCreateBoard = useCallback(
     async (
@@ -2011,21 +2316,20 @@ export function BoardApp() {
       },
     ) => {
       setBusy(true);
-      setError(null);
+      setLocalError(null);
       try {
         // Optional: connect a new repo first when creating a board against new path/url
         if (newBoardUseNewRepo && (connectUrl.trim() || connectPath.trim())) {
-          const r = await connectRepo({
+          const r = await connectRepoAsync({
             url: connectUrl.trim() || undefined,
             path: connectPath.trim() || undefined,
             token: connectToken.trim() || undefined,
             scaffold: true,
           });
           if (r.slug) setRemoteSlug(r.slug);
-          if (r.remotes) setRemotes(r.remotes);
           if (connectToken.trim()) {
             try {
-              await upsertCredentialBook({
+              await upsertCredentialAsync({
                 label: connectUrl.trim() || connectPath.trim() || "GitHub PAT",
                 token: connectToken.trim(),
               });
@@ -2037,21 +2341,22 @@ export function BoardApp() {
           setConnectToken("");
         }
 
-        const res = await createBoard(name, {
-          credentialId: opts?.credentialId,
-          remoteSlug: opts?.remoteSlug,
-          // boardDir is display-only for new boards; id is always random `b-…`
-          // unless tests pass id explicitly via API.
+        // The mutation already refreshed the board list and the workspace, so
+        // the only thing left is to open what was just created.
+        const res = await createBoardAsync({
+          name,
+          options: {
+            credentialId: opts?.credentialId,
+            remoteSlug: opts?.remoteSlug,
+            // boardDir is display-only for new boards; id is always random `b-…`
+            // unless tests pass id explicitly via API.
+          },
         });
-        if (res.sync) setSync(res.sync);
         setStatus(`Created board “${res.boardId}”`);
-        const listed = await listBoards();
-        setBoards(listed.boards);
         setBoardId(res.boardId);
         await reload(res.boardId);
-        await refreshWorkspace();
       } catch (e) {
-        setError(String(e));
+        setLocalError(String(e));
         throw e;
       } finally {
         setBusy(false);
@@ -2059,11 +2364,13 @@ export function BoardApp() {
     },
     [
       reload,
-      refreshWorkspace,
       newBoardUseNewRepo,
       connectUrl,
       connectPath,
       connectToken,
+      connectRepoAsync,
+      createBoardAsync,
+      upsertCredentialAsync,
     ],
   );
 
@@ -2081,35 +2388,180 @@ export function BoardApp() {
   const saveBoardEditor = useCallback(async () => {
     if (!editBoardDraft) return;
     setBusy(true);
-    setError(null);
+    setLocalError(null);
     try {
       const fromRemoteSlug = editBoardDraft.key.split("::")[0]!;
-      const boardId = editBoardDraft.key.split("::")[1]!;
-      await patchBoardBinding({
+      const editedBoardId = editBoardDraft.key.split("::")[1]!;
+      await patchBoardBindingAsync({
         remoteSlug: editBoardDraft.remoteSlug,
         fromRemoteSlug,
-        boardId,
+        boardId: editedBoardId,
         credentialId:
           editBoardDraft.credentialId === ""
             ? null
             : editBoardDraft.credentialId,
-        label: editBoardDraft.label.trim() || boardId,
-        boardDir: editBoardDraft.boardDir.trim() || boardId,
+        label: editBoardDraft.label.trim() || editedBoardId,
+        boardDir: editBoardDraft.boardDir.trim() || editedBoardId,
       });
-      setStatus(`Saved board “${editBoardDraft.label || boardId}”`);
+      setStatus(`Saved board “${editBoardDraft.label || editedBoardId}”`);
       // Keep editor open on new key if remote changed
-      const newKey = `${editBoardDraft.remoteSlug}::${boardId}`;
+      const newKey = `${editBoardDraft.remoteSlug}::${editedBoardId}`;
       setExpandedBoardKey(newKey);
       setEditBoardDraft({ ...editBoardDraft, key: newKey });
-      await refreshWorkspace();
     } catch (e) {
-      setError(String(e));
+      setLocalError(String(e));
     } finally {
       setBusy(false);
     }
-  }, [editBoardDraft, refreshWorkspace]);
+  }, [editBoardDraft, patchBoardBindingAsync]);
+
+  const highIssues = useMemo(
+    () => (fleet?.issues ?? []).filter((i) => i.severity === "high"),
+    [fleet],
+  );
+  /** Only unacknowledged alerts drive the badge. */
+  const unackedAlerts = useMemo(
+    () => highIssues.filter((i) => !ackedAlerts.has(alertKey(i))),
+    [highIssues, ackedAlerts],
+  );
+
+  /**
+   * Drop acknowledgements whose condition no longer exists, so the stored set
+   * cannot grow without bound and a recurring alert is not permanently muted.
+   */
+  useEffect(() => {
+    if (!fleet) return;
+    setAckedAlerts((prev) => {
+      const next = pruneAcked(prev, highIssues);
+      if (next === prev) return prev;
+      writeAckedAlerts(next);
+      return next;
+    });
+  }, [fleet, highIssues]);
+
+  const ackAlert = useCallback((issue: { boardId: string; kind: string; message: string }) => {
+    setAckedAlerts((prev) => {
+      const next = new Set(prev);
+      next.add(alertKey(issue));
+      writeAckedAlerts(next);
+      return next;
+    });
+  }, []);
+
+  const ackAllAlerts = useCallback(() => {
+    setAckedAlerts((prev) => {
+      const next = new Set(prev);
+      for (const i of highIssues) next.add(alertKey(i));
+      writeAckedAlerts(next);
+      return next;
+    });
+  }, [highIssues]);
+
+  /**
+   * Project commits for the bound source repo, pulled lazily the first time a
+   * card is opened on this board. The server already tags each commit with the
+   * card ids named in its subject, so this is a join, not a new metric — and
+   * nothing is stored on the card (a sha on frontmatter would go stale on
+   * rebase; git stays the source of truth).
+   *
+   * `enabled` is the whole laziness mechanism now: no card open, no request.
+   * The board id is part of the key rather than a marker the effect had to
+   * check, which is what used to make this read cancel itself. An unbound repo
+   * answers `commits: []` and a failed read answers nothing at all — both leave
+   * the map empty, so the detail panel renders no commits section.
+   */
+  const codeHistoryQ = useCodeHistory(
+    boardId,
+    CARD_COMMIT_LIMIT,
+    Boolean(selected),
+  );
+  const commitsByCard = useMemo(
+    () => commitsByCardId(codeHistoryQ.data?.commits),
+    [codeHistoryQ.data?.commits],
+  );
+
+  /**
+   * Project-history columns. Same three cells as the card-detail commit lists,
+   * but the subject links out and the row carries a strip of card jump buttons,
+   * so this one closes over board state and has to be built per render.
+   */
+  const projectCommitColumns = useMemo<DataTableColumn<ProjectCommit>[]>(
+    () => [
+      {
+        id: "sha",
+        accessorFn: (c) => c.sha,
+        cell: (ctx) => (
+          <code className="kb-history-sha">
+            {ctx.row.original.sha.slice(0, 7)}
+          </code>
+        ),
+      },
+      {
+        id: "subject",
+        header: "subject",
+        accessorFn: (c) => c.subject,
+        cell: (ctx) => {
+          const c = ctx.row.original;
+          return c.url ? (
+            <a
+              className="kb-history-subj"
+              href={c.url}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="project-commit-link"
+            >
+              {c.subject}
+            </a>
+          ) : (
+            <span className="kb-history-subj">{c.subject}</span>
+          );
+        },
+      },
+      {
+        id: "cards",
+        // Card ids are searchable — "find the commit that touched c-a1b2" is the
+        // whole reason this list has a filter — but not a sort key, so no header.
+        accessorFn: (c) => (c.cardIds ?? []).join(" "),
+        cell: (ctx) => {
+          const c = ctx.row.original;
+          if (!c.cardIds || c.cardIds.length === 0) return null;
+          return (
+            <span className="kb-commit-cards">
+              {c.cardIds.map((cid) => (
+                <button
+                  key={cid}
+                  type="button"
+                  className="kb-linkish"
+                  data-testid={`commit-card-${cid}`}
+                  onClick={() => {
+                    const found = board?.cards.find(
+                      (x) => x.id.toLowerCase() === cid,
+                    );
+                    if (found) {
+                      setSelected(found);
+                      setFocusedCardId(found.id);
+                      setShowHistory(false);
+                    }
+                  }}
+                >
+                  {cid}
+                </button>
+              ))}
+            </span>
+          );
+        },
+      },
+      ...commitBylineColumns<ProjectCommit>(),
+    ],
+    [board],
+  );
 
   const columns = useMemo(() => board?.columns ?? [], [board]);
+  /** Column → accent, resolved against the whole board so no two share a hue. */
+  const colAccents = useMemo(
+    () => columnAccents(columns.map((c) => c.id)),
+    [columns],
+  );
 
   const allLabels = useMemo(() => {
     if (!board) return [] as string[];
@@ -2149,19 +2601,18 @@ export function BoardApp() {
     async (slug: string, boardHint?: string) => {
       setBusy(true);
       try {
-        const r = await setActiveRemote(slug);
-        setRemotes(r.remotes);
+        const r = await setActiveRemoteAsync(slug);
         setRemoteSlug(r.active);
         setSelected(null);
         setBoardId(null);
         await reload(boardHint);
       } catch (e) {
-        setError(String(e));
+        setLocalError(String(e));
       } finally {
         setBusy(false);
       }
     },
-    [reload],
+    [reload, setActiveRemoteAsync],
   );
 
   /** Nav grid from current board (filtered cards per column). */
@@ -2276,22 +2727,25 @@ export function BoardApp() {
       due?: string | null;
       priority?: string | null;
       labels?: string[];
+      checklist?: ChecklistItem[];
     }) => {
       if (!boardId || !selected) return;
       setBusy(true);
       try {
-        const res = await updateCard(boardId, selected.id, patch);
-        if (res.sync) setSync(res.sync);
+        const res = await updateCardAsync({
+          boardId,
+          cardId: selected.id,
+          patch,
+        });
         setStatus(`Updated ${selected.id}`);
         setSelected(res.card);
-        await reload(boardId);
       } catch (e) {
-        setError(String(e));
+        setLocalError(String(e));
       } finally {
         setBusy(false);
       }
     },
-    [boardId, selected, reload],
+    [boardId, selected, updateCardAsync],
   );
 
   const toggleSelect = useCallback((cardId: string, _multi: boolean) => {
@@ -2308,68 +2762,96 @@ export function BoardApp() {
     setBusy(true);
     try {
       const ids = [...selectedIds];
-      const res = await archiveCards(boardId, { cardIds: ids });
-      if (res.sync) setSync(res.sync);
+      const res = await archiveCardsAsync({ boardId, body: { cardIds: ids } });
       setSelectedIds(new Set());
       setStatus(`Archived ${res.archived?.length ?? ids.length} card(s)`);
-      await reload(boardId);
     } catch (e) {
-      setError(String(e));
+      setLocalError(String(e));
     } finally {
       setBusy(false);
     }
-  }, [boardId, selectedIds, reload]);
+  }, [boardId, selectedIds, archiveCardsAsync]);
 
   const onPullRemote = useCallback(async () => {
     setBusy(true);
-    setError(null);
+    setLocalError(null);
     try {
-      const r = await pullRemote();
-      if (r.sync) setSync(r.sync);
+      const r = await pullRemoteAsync();
       setStatus(
         r.fastForwarded
           ? `Fetched remote · fast-forwarded${r.healed.length ? ` · healed ${r.healed.length}` : ""}`
           : `Fetched remote · up to date${r.healed.length ? ` · healed ${r.healed.length}` : ""}`,
       );
-      await reload(boardId ?? undefined);
     } catch (e) {
-      setError(String(e));
+      setLocalError(String(e));
     } finally {
       setBusy(false);
     }
-  }, [boardId, reload]);
+  }, [pullRemoteAsync]);
 
   const onArchiveOlder = useCallback(async () => {
     if (!boardId) return;
     setBusy(true);
     try {
-      const res = await archiveCards(boardId, { olderThanKeep: 20 });
+      const res = await archiveCardsAsync({
+        boardId,
+        body: { olderThanKeep: 20 },
+      });
       setStatus(`Archived ${res.archived.length} cards`);
-      if (res.sync) setSync(res.sync);
       setSelected(null);
-      await reload(boardId);
     } catch (e) {
-      setError(String(e));
+      setLocalError(String(e));
     } finally {
       setBusy(false);
     }
-  }, [boardId, reload]);
+  }, [boardId, archiveCardsAsync]);
 
   const onRemapColumn = useCallback(
     async (from: string, to: string) => {
       if (!boardId) return;
       setBusy(true);
       try {
-        const res = await remapColumn(boardId, from, to);
+        const res = await remapColumnAsync({ boardId, from, to });
         setStatus(`Remapped ${res.remapped.length} cards ${from} → ${to}`);
-        await reload(boardId);
       } catch (e) {
-        setError(String(e));
+        setLocalError(String(e));
       } finally {
         setBusy(false);
       }
     },
-    [boardId, reload],
+    [boardId, remapColumnAsync],
+  );
+
+  /**
+   * Keep-mine / keep-theirs / heal are the same call with a different verb; the
+   * three copies this replaces only differed in their status string.
+   */
+  const onResolveConflict = useCallback(
+    async (
+      conflictBoardId: string,
+      cardId: string,
+      choice: "mine" | "theirs" | "heal",
+      verb: string,
+    ) => {
+      try {
+        const r = await resolveConflictAsync({
+          boardId: conflictBoardId,
+          cardId,
+          choice,
+        });
+        // A frozen card can live on a board other than the open one; the
+        // mutation only knows about its own.
+        if (boardId && boardId !== conflictBoardId) await inv.board(boardId);
+        setStatus(
+          r.remaining === 0
+            ? "All conflicts resolved — sync unfrozen"
+            : `${verb} · ${r.remaining} remaining`,
+        );
+      } catch (e) {
+        setLocalError(String(e));
+      }
+    },
+    [boardId, inv, resolveConflictAsync],
   );
 
   const syncStatusTooltip = (() => {
@@ -2412,16 +2894,15 @@ export function BoardApp() {
     }
     if (st === "pending" || st === "error" || st === "offline" || st === "frozen") {
       setBusy(true);
-      retrySync()
+      retrySyncAsync()
         .then((s) => {
-          setSync(s);
           setStatus(
             s.status === "synced"
               ? "Pushed pending changes"
               : s.label,
           );
         })
-        .catch((e) => setError(String(e)))
+        .catch((e) => setLocalError(String(e)))
         .finally(() => setBusy(false));
       return;
     }
@@ -2429,7 +2910,7 @@ export function BoardApp() {
     setBoardMenuOpen(false);
     setShowSettings(true);
     setSettingsNav("repositories");
-  }, [sync]);
+  }, [sync, retrySyncAsync]);
 
   const brand = (
     <a className="kb-brand" href="/" data-testid="brand">
@@ -2473,118 +2954,237 @@ export function BoardApp() {
         : "Theme: auto (click for light)";
 
   const boardPicker = (
-    <div className="kb-board-picker" data-testid="board-picker">
-      <button
-        type="button"
-        className="kb-board-picker-btn"
-        data-testid="board-select"
-        aria-expanded={boardMenuOpen}
-        aria-haspopup="listbox"
-        onClick={() => setBoardMenuOpen((v) => !v)}
-      >
-        <span className="kb-board-picker-label">board</span>
-        <span className="kb-board-picker-title" data-testid="board-id">
-          {board?.title ||
-            boards.find((b) => b.id === boardId)?.title ||
-            boardId ||
-            "—"}
-        </span>
-        <span className="kb-board-picker-caret" aria-hidden="true">
-          ▼
-        </span>
-      </button>
-      <span
-        className="kb-card-count-badge"
-        data-testid="card-count-badge"
-        title="Cards on this board"
-      >
-        {totalCardCount}
-      </span>
-      {boardMenuOpen ? (
-        <div
-          className="kb-board-menu"
-          data-testid="board-menu"
-          role="listbox"
-          aria-label="Boards"
-        >
-          <div className="kb-board-menu-heading">boards</div>
-          <div className="kb-board-menu-list">
-            {boards.map((b) => (
-              <button
-                key={b.id}
-                type="button"
-                role="option"
-                aria-selected={b.id === boardId}
-                className={
-                  b.id === boardId
-                    ? "kb-board-menu-item is-active"
-                    : "kb-board-menu-item"
-                }
-                data-testid={`board-menu-item-${b.id}`}
-                onClick={() => {
-                  setBoardMenuOpen(false);
-                  setBoardId(b.id);
-                  reload(b.id).catch((err) => setError(String(err)));
-                }}
-              >
-                <span title={b.id}>{b.title || b.id}</span>
-                <span className="kb-board-menu-count">{b.cardCount}</span>
-              </button>
-            ))}
-          </div>
+    // No `onClose`: this menu is dismissed today by the kb-app root's onClick
+    // (see the app shell below), and letting Popover own dismissal would both
+    // race that handler and add Escape/in-header dismissal it does not have.
+    <Popover
+      open={boardMenuOpen}
+      className="kb-board-picker"
+      testId="board-picker"
+      panelClassName="kb-board-menu"
+      panelTestId="board-menu"
+      role="listbox"
+      ariaLabel="Boards"
+      anchor={
+        <>
           <button
             type="button"
-            className="kb-board-menu-new"
-            data-testid="board-menu-new"
+            className="kb-board-picker-btn"
+            data-testid="board-select"
+            aria-expanded={boardMenuOpen}
+            aria-haspopup="listbox"
+            onClick={() => setBoardMenuOpen((v) => !v)}
+          >
+            <span className="kb-board-picker-label">board</span>
+            <span className="kb-board-picker-title" data-testid="board-id">
+              {board?.title ||
+                boards.find((b) => b.id === boardId)?.title ||
+                boardId ||
+                "—"}
+            </span>
+            <span className="kb-board-picker-caret" aria-hidden="true">
+              ▼
+            </span>
+          </button>
+          <CountBadge
+            className="kb-card-count-badge"
+            value={totalCardCount}
+            title="Cards on this board"
+            data-testid="card-count-badge"
+          />
+        </>
+      }
+    >
+      <div className="kb-board-menu-heading">boards</div>
+      <div className="kb-board-menu-list">
+        {boards.map((b) => (
+          <MenuItem
+            key={b.id}
+            role="option"
+            selected={b.id === boardId}
+            className={
+              b.id === boardId
+                ? "kb-board-menu-item is-active"
+                : "kb-board-menu-item"
+            }
+            testId={`board-menu-item-${b.id}`}
             onClick={() => {
               setBoardMenuOpen(false);
-              const name = window.prompt("New board name");
-              if (name?.trim()) void onCreateBoard(name.trim());
+              setBoardId(b.id);
+              reload(b.id).catch((err) => setLocalError(String(err)));
             }}
           >
-            + new board
-          </button>
-        </div>
-      ) : null}
-    </div>
+            <span title={b.id}>{b.title || b.id}</span>
+            <CountBadge className="kb-board-menu-count" value={b.cardCount} />
+          </MenuItem>
+        ))}
+      </div>
+      <MenuItem
+        className="kb-board-menu-new"
+        testId="board-menu-new"
+        onClick={() => {
+          setBoardMenuOpen(false);
+          const name = window.prompt("New board name");
+          if (name?.trim()) void onCreateBoard(name.trim());
+        }}
+      >
+        + new board
+      </MenuItem>
+    </Popover>
   );
 
   const openPortfolio = useCallback(() => {
+    // Clearing boardId is what blanks the board and enables the two portfolio
+    // queries; refetching them keeps the roll-up honest on a deliberate visit.
     setShowPortfolio(true);
     setBoardId(null);
-    setBoard(null);
     setSelected(null);
-    writeWindowBoardRoute(null, null, remoteSlug);
-    Promise.all([getPortfolio(), getFleetHealth()])
-      .then(([p, f]) => {
-        setPortfolio(p);
-        setFleet(f);
-      })
-      .catch((e) => setError(String(e)));
-  }, [remoteSlug]);
+    // formatBoardPath(null, …) is "/" whatever the slug, so the slug is dropped
+    // here exactly as it was before. See legacySlugReplace for why the
+    // push/replace choice depends on it.
+    navigateTo(
+      { kind: "board", boardId: null, cardId: null, remoteSlug: null },
+      { replace: legacySlugReplace(remoteSlug) },
+    );
+    void Promise.all([inv.portfolio(), inv.fleet()]);
+  }, [navigateTo, remoteSlug, inv]);
 
   const openBoardFromPortfolio = useCallback(
     (id: string) => {
       setShowPortfolio(false);
-      writeWindowBoardRoute(id, null, remoteSlug);
+      // `remoteSlug` is deliberately not threaded into the path: the pre-router
+      // call passed it where an options object belongs, so it never reached the
+      // URL and this wrote a bare /b/<id>, which the sync effect then rewrites
+      // to the slug-qualified path. See legacySlugReplace.
+      navigateTo(
+        { kind: "board", boardId: id, cardId: null, remoteSlug: null },
+        { replace: legacySlugReplace(remoteSlug) },
+      );
       void reload(id);
     },
-    [remoteSlug, reload],
+    [navigateTo, remoteSlug, reload],
+  );
+
+  /** The 20 newest entries across every board. Memoized so the slice — and with
+   *  it the table's row model — survives an unrelated re-render. */
+  const portfolioActivity = useMemo(
+    () => (portfolio?.activity ?? []).slice(0, PORTFOLIO_ACTIVITY_LIMIT),
+    [portfolio?.activity],
+  );
+
+  const portfolioActivityColumns = useMemo<
+    DataTableColumn<CrossBoardActivityEntry>[]
+  >(
+    () => [
+      {
+        id: "date",
+        header: "date",
+        accessorFn: (e) => e.date,
+        sortDescFirst: true,
+        cell: (ctx) => (
+          <span className="kb-activity-date">{ctx.row.original.date}</span>
+        ),
+      },
+      {
+        id: "board",
+        header: "board",
+        accessorFn: (e) => e.boardTitle,
+        cell: (ctx) => (
+          <button
+            type="button"
+            className="kb-activity-card"
+            onClick={() => openBoardFromPortfolio(ctx.row.original.boardId)}
+          >
+            {ctx.row.original.boardTitle}
+          </button>
+        ),
+      },
+      {
+        id: "card",
+        header: "card",
+        accessorFn: (e) => e.cardTitle,
+        cell: (ctx) => (
+          <span className="kb-muted">{ctx.row.original.cardTitle}</span>
+        ),
+      },
+      {
+        // The log line is prose: worth searching, meaningless to sort by, so it
+        // gets an accessor but no header.
+        id: "line",
+        accessorFn: (e) => e.line,
+        cell: (ctx) => (
+          <span className="kb-activity-line">{ctx.row.original.line}</span>
+        ),
+      },
+    ],
+    [openBoardFromPortfolio],
+  );
+
+  /**
+   * Settings' activity feed: the same three cells as the portfolio digest, but
+   * scoped to one board, so the card column jumps straight into the card rather
+   * than switching boards. At ACTIVITY_LIMIT entries this is the longest flat
+   * list in the app, which is why it gets the search box.
+   */
+  const activityColumns = useMemo<DataTableColumn<ActivityEntry>[]>(
+    () => [
+      {
+        id: "date",
+        header: "date",
+        accessorFn: (e) => e.date,
+        sortDescFirst: true,
+        cell: (ctx) => (
+          <span className="kb-activity-date">{ctx.row.original.date}</span>
+        ),
+      },
+      {
+        id: "card",
+        header: "card",
+        accessorFn: (e) => e.cardTitle || e.cardId,
+        cell: (ctx) => {
+          const e = ctx.row.original;
+          return (
+            <button
+              type="button"
+              className="kb-activity-card"
+              data-testid={`activity-card-${e.cardId}`}
+              onClick={() => {
+                const c = board?.cards.find((x) => x.id === e.cardId);
+                if (c) {
+                  setFocusedCardId(c.id);
+                  setSelected(c);
+                  setShowSettings(false);
+                }
+              }}
+            >
+              {e.cardTitle || e.cardId}
+            </button>
+          );
+        },
+      },
+      {
+        id: "line",
+        accessorFn: (e) => e.line,
+        cell: (ctx) => (
+          <span className="kb-activity-line">{ctx.row.original.line}</span>
+        ),
+      },
+    ],
+    [board],
   );
 
   const appHeader = (
     <header className="kb-navbar" data-testid="app-navbar">
       {brand}
       {boards.length > 0 ? (
-        <button
-          type="button"
-          className={`kb-toolbar-btn${showPortfolio ? " is-on" : ""}`}
+        <ToolbarButton
+          on={showPortfolio}
           data-testid="portfolio-open"
           title="All projects at a glance"
           onClick={openPortfolio}
         >
           Projects
-        </button>
+        </ToolbarButton>
       ) : null}
       {boards.length > 0 || boardId ? boardPicker : null}
       <div className="kb-navbar-grow" aria-hidden="true" />
@@ -2600,69 +3200,48 @@ export function BoardApp() {
           data-testid="filter-query"
         />
       </label>
-      <div
+      <SegmentedControl
         className="kb-priority-seg"
-        role="group"
-        aria-label="Priority filter"
-        data-testid="priority-filter"
-      >
-        {(["", "P0", "P1", "P2"] as const).map((p) => (
-          <button
-            key={p || "all"}
-            type="button"
-            className={filterPriority === p ? "is-on" : undefined}
-            data-testid={`priority-filter-${p || "all"}`}
-            onClick={() => setFilterPriority(p)}
-          >
-            {p || "all"}
-          </button>
-        ))}
-      </div>
+        label="Priority filter"
+        testId="priority-filter"
+        value={filterPriority}
+        onChange={setFilterPriority}
+        items={(["", "P0", "P1", "P2"] as const).map((p) => ({
+          value: p,
+          // The "all" segment's value is the empty string, which is not a
+          // usable React key.
+          key: p || "all",
+          label: p || "all",
+          testId: `priority-filter-${p || "all"}`,
+        }))}
+      />
       {boardId ? (
         <>
-          <button
-            type="button"
-            className="kb-toolbar-btn"
+          <ToolbarButton
             data-testid="board-notes-open"
             title="Project notes (NOTES.md)"
             onClick={() => {
               if (!boardId) return;
+              // Dropping the draft re-arms the editor on whatever the query
+              // returns for this board; opening it enables the read.
+              setNotesDraft(null);
               setShowNotes(true);
-              setNotesBusy(true);
-              getBoardNotes(boardId)
-                .then((r) => setNotesBody(r.body))
-                .catch((e) => setError(String(e)))
-                .finally(() => setNotesBusy(false));
             }}
           >
             Notes
-          </button>
-          <button
-            type="button"
-            className="kb-toolbar-btn"
+          </ToolbarButton>
+          <ToolbarButton
             data-testid="board-history-open"
             title="Project code commits (not boards git log)"
             onClick={() => {
               if (!boardId) return;
+              setCodePathDraft(null);
+              setCodeRemoteDraft(null);
               setShowHistory(true);
-              setHistoryBusy(true);
-              getCodeHistory(boardId)
-                .then((r) => {
-                  setHistoryCommits(r.commits);
-                  setHistoryMeta({
-                    bound: r.bound,
-                    error: r.error,
-                    codePath: r.codePath,
-                  });
-                  setCodePathDraft(r.binding?.path ?? r.codePath ?? "");
-                  setCodeRemoteDraft(r.binding?.remote ?? "");
-                })
-                .catch((e) => setError(String(e)))
-                .finally(() => setHistoryBusy(false));
             }}
           >
             History
-          </button>
+          </ToolbarButton>
         </>
       ) : null}
       <button
@@ -2676,21 +3255,120 @@ export function BoardApp() {
       >
         {busy ? "…" : (sync?.label ?? "○ local")}
       </button>
+      <IconButton
+        data-testid="refresh-now"
+        title={refreshing ? "Refreshing…" : "Fetch from git and reload boards"}
+        aria-label="Refresh from git"
+        disabled={refreshing}
+        onClick={() => {
+          refreshNow(undefined, {
+            onSuccess: (r) =>
+              setStatus(
+                r.changed
+                  ? `Refreshed — new commit ${r.sha.slice(0, 7)}`
+                  : "Refreshed — already up to date",
+              ),
+            onError: (e) => setError(String(e)),
+          });
+        }}
+      >
+        <span className={refreshing ? "kb-spin" : undefined}>⟳</span>
+      </IconButton>
       {selectedIds.size > 0 ? (
-        <button
-          type="button"
-          className="kb-icon-btn"
+        <IconButton
           data-testid="bulk-archive"
           onClick={() => void bulkArchiveSelected()}
           disabled={busy}
           title={`Archive ${selectedIds.size} selected`}
         >
           ⌫
-        </button>
+        </IconButton>
       ) : null}
-      <button
-        type="button"
-        className="kb-icon-btn"
+      {highIssues.length > 0 ? (
+        // No `onClose`, for the same reason as the board picker above.
+        <Popover
+          open={showAlerts}
+          className="kb-alerts"
+          panelClassName="kb-alerts-menu"
+          panelTestId="fleet-alerts"
+          role="dialog"
+          ariaLabel="Fleet alerts"
+          anchor={
+            <IconButton
+              className={`kb-alerts-btn${
+                unackedAlerts.length === 0 ? " is-quiet" : ""
+              }`}
+              data-testid="alerts-toggle"
+              title={
+                unackedAlerts.length > 0
+                  ? `${unackedAlerts.length} new alert${unackedAlerts.length === 1 ? "" : "s"}`
+                  : `${highIssues.length} alert${highIssues.length === 1 ? "" : "s"}, all acknowledged`
+              }
+              aria-label={`Alerts: ${unackedAlerts.length} unread of ${highIssues.length}`}
+              aria-expanded={showAlerts}
+              onClick={() => {
+                setBoardMenuOpen(false);
+                setShowAlerts((v) => !v);
+              }}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M8 2a4 4 0 0 0-4 4c0 2.5-.7 3.9-1.3 4.6a.5.5 0 0 0 .37.84h9.86a.5.5 0 0 0 .37-.84C12.7 9.9 12 8.5 12 6a4 4 0 0 0-4-4Z" />
+                <path d="M6.5 13.5a1.6 1.6 0 0 0 3 0" />
+              </svg>
+              {unackedAlerts.length > 0 ? (
+                <CountBadge
+                  className="kb-alerts-count"
+                  value={unackedAlerts.length}
+                  data-testid="alerts-count"
+                />
+              ) : null}
+            </IconButton>
+          }
+        >
+          <div className="kb-alerts-menu-head">
+            <span>needs attention</span>
+            {unackedAlerts.length > 0 ? (
+              <button
+                type="button"
+                className="kb-alerts-ackall"
+                data-testid="alerts-ack-all"
+                onClick={ackAllAlerts}
+              >
+                mark all read
+              </button>
+            ) : null}
+          </div>
+          <div className="kb-alerts-list">
+            {highIssues.slice(0, 8).map((i, idx) => (
+              <MenuItem
+                key={`${i.boardId}-${i.kind}-${idx}`}
+                className={`kb-alerts-item${
+                  ackedAlerts.has(alertKey(i)) ? " is-acked" : ""
+                }`}
+                onClick={() => {
+                  ackAlert(i);
+                  setShowAlerts(false);
+                  openBoardFromPortfolio(i.boardId);
+                }}
+              >
+                <span className="kb-alerts-board">{i.boardTitle}</span>
+                <span className="kb-alerts-msg">{i.message}</span>
+              </MenuItem>
+            ))}
+          </div>
+        </Popover>
+      ) : null}
+      <IconButton
         data-testid="theme-select"
         data-theme-pref={themePref}
         title={themeTitle}
@@ -2698,10 +3376,8 @@ export function BoardApp() {
         onClick={cycleTheme}
       >
         <span data-testid={`theme-${themePref}`}>{themeGlyph}</span>
-      </button>
-      <button
-        type="button"
-        className="kb-icon-btn"
+      </IconButton>
+      <IconButton
         data-testid="settings-toggle"
         title="Settings"
         aria-expanded={showSettings}
@@ -2714,17 +3390,15 @@ export function BoardApp() {
         }}
       >
         ⚙
-      </button>
-      <button
-        type="button"
-        className="kb-icon-btn"
+      </IconButton>
+      <IconButton
         data-testid="help-toggle"
         title="Keyboard shortcuts"
         aria-expanded={showHelp}
         onClick={() => setShowHelp((v) => !v)}
       >
         ?
-      </button>
+      </IconButton>
     </header>
   );
 
@@ -2736,10 +3410,10 @@ export function BoardApp() {
           <p className="kb-error" data-testid="error">
             {error}
           </p>
-          <p className="kb-muted">
+          <EmptyState>
             Connect a boards repo with <code>--repo &lt;path&gt;</code>, or open
             Settings ⚙.
-          </p>
+          </EmptyState>
         </div>
       </div>
     );
@@ -2753,6 +3427,7 @@ export function BoardApp() {
       tabIndex={-1}
       onClick={() => {
         if (boardMenuOpen) setBoardMenuOpen(false);
+        if (showAlerts) setShowAlerts(false);
       }}
     >
       <a href="#kb-main-board" className="kb-skip-link" data-testid="skip-link">
@@ -2775,152 +3450,196 @@ export function BoardApp() {
       {showPortfolio && !needsConnect && boards.length > 0 ? (
         <div className="kb-portfolio" data-testid="portfolio-home">
           <div className="kb-portfolio-head">
-            <h2 className="kb-portfolio-title">Projects</h2>
-            <p className="kb-muted" data-testid="portfolio-summary">
-              Multi-project home
-              {portfolio
-                ? ` · ${portfolio.p0Total} P0 · ${portfolio.staleTotal} stale`
-                : ""}
-              {portfolio?.velocity
-                ? ` · 7d: ${portfolio.velocity.done7d} done · ${portfolio.velocity.codeCommits24h} code commits/24h · ${portfolio.velocity.agentEvents7d} agent logs`
-                : ""}
-              {fleet
-                ? ` · fleet ${fleet.ok ? "ok" : `${fleet.highCount} high`}`
-                : ""}
-            </p>
-          </div>
-          {fleet && fleet.highCount > 0 ? (
-            <div
-              className="kb-banner kb-banner--offline"
-              data-testid="fleet-alerts"
-              role="alert"
-            >
-              <strong>Fleet needs attention ({fleet.highCount} high)</strong>
-              <ul className="kb-activity-list">
-                {fleet.issues
-                  .filter((i) => i.severity === "high")
-                  .slice(0, 8)
-                  .map((i, idx) => (
-                    <li key={`${i.boardId}-${i.kind}-${idx}`}>
-                      <button
-                        type="button"
-                        className="kb-activity-card"
-                        onClick={() => openBoardFromPortfolio(i.boardId)}
-                      >
-                        {i.boardTitle}
-                      </button>
-                      <span className="kb-activity-line">{i.message}</span>
-                    </li>
-                  ))}
-              </ul>
+            <div className="kb-portfolio-head-row">
+              <h2 className="kb-portfolio-title">Projects</h2>
+              <span className="kb-portfolio-head-meta">
+                {(portfolio?.tiles ?? []).length} boards
+                {portfolio ? ` · ${portfolio.p0Total} P0` : ""}
+                {portfolio?.velocity
+                  ? ` · ${portfolio.velocity.done7d} done/7d`
+                  : ""}
+              </span>
             </div>
-          ) : null}
+            <EmptyState testId="portfolio-summary">
+              Progress across every board. Open one to work the cards.
+              {portfolio?.staleTotal ? ` ${portfolio.staleTotal} stale.` : ""}
+              {portfolio?.velocity
+                ? ` ${portfolio.velocity.agentEvents7d} agent logs and ${portfolio.velocity.codeCommits24h ?? 0} code commits in the last 24h.`
+                : ""}
+            </EmptyState>
+          </div>
+          {/* Fleet alerts live behind the header bell — the design keeps this
+              page to a heading plus the board grid. */}
           <div className="kb-portfolio-grid">
-            {(portfolio?.tiles ?? []).map((t) => (
-              <button
-                key={t.boardId}
-                type="button"
-                className={`kb-portfolio-tile kb-portfolio-tile--${t.health ?? "idle"}`}
-                data-testid={`portfolio-tile-${t.boardId}`}
-                data-health={t.health ?? "idle"}
-                onClick={() => openBoardFromPortfolio(t.boardId)}
-              >
-                <div className="kb-portfolio-tile-top">
-                  <strong>{t.title}</strong>
-                  <span
-                    className={`kb-portfolio-health kb-portfolio-health--${t.health ?? "idle"}`}
-                    data-testid={`portfolio-health-${t.boardId}`}
-                  >
-                    {t.health ?? "idle"}
-                  </span>
-                </div>
-                <div className="kb-portfolio-velocity" data-testid={`portfolio-vel-${t.boardId}`}>
-                  <span>
-                    {t.velocity?.done7d ?? 0} done/7d
-                  </span>
-                  <span>
-                    {t.velocity?.codeCommits7d == null
-                      ? "code —"
-                      : `${t.velocity.codeCommits7d} commits/7d`}
-                  </span>
-                  <span>
-                    {formatPulseAge(t.velocity?.pulseAgeHours ?? null)}
-                  </span>
-                </div>
-                <div className="kb-portfolio-badges">
-                  {t.p0Count > 0 ? (
-                    <span className="kb-portfolio-badge kb-portfolio-badge--p0">
-                      {t.p0Count} P0
-                    </span>
-                  ) : null}
-                  {(t.readyCount ?? 0) > 0 ? (
-                    <span className="kb-portfolio-badge">
-                      {t.readyCount} ready
-                    </span>
-                  ) : null}
-                  {t.doingCount > 0 ? (
-                    <span className="kb-portfolio-badge">
-                      {t.doingCount} doing
-                    </span>
-                  ) : null}
-                  {t.blockedCount > 0 ? (
-                    <span className="kb-portfolio-badge kb-portfolio-badge--blocked">
-                      {t.blockedCount} blocked
-                    </span>
-                  ) : null}
-                  {t.staleDoingCount > 0 ? (
-                    <span className="kb-portfolio-badge kb-portfolio-badge--stale">
-                      {t.staleDoingCount} stale
-                    </span>
-                  ) : null}
-                  {t.wipDoing?.over ? (
-                    <span className="kb-portfolio-badge kb-portfolio-badge--stale">
-                      WIP {t.wipDoing.count}/{t.wipDoing.limit}
-                    </span>
-                  ) : t.wipDoing ? (
-                    <span className="kb-portfolio-badge">
-                      WIP {t.wipDoing.count}/{t.wipDoing.limit}
-                    </span>
-                  ) : null}
-                  {t.codeBound ? (
-                    <span className="kb-portfolio-badge kb-portfolio-badge--code">
-                      source
-                    </span>
-                  ) : null}
-                </div>
-                <div className="kb-portfolio-meta kb-muted">
-                  {t.cardCount} cards
-                  {t.lastAgent ? ` · agent ${t.lastAgent}` : ""}
-                  {t.velocity?.agentEvents7d
-                    ? ` · ${t.velocity.agentEvents7d} agent logs/7d`
-                    : ""}
-                  {t.lastActivity
-                    ? ` · ${t.lastActivity.line.slice(0, 48)}`
-                    : ""}
-                </div>
-              </button>
-            ))}
+            {(portfolio?.tiles ?? []).map((t) => {
+              const colIds = Object.keys(t.columnCounts ?? {});
+              const tileAccents = columnAccents(colIds);
+              const total = t.cardCount || 0;
+              // Design treats the last column as "done".
+              const doneId = colIds[colIds.length - 1];
+              const doneCount = doneId ? (t.columnCounts[doneId] ?? 0) : 0;
+              const pct = total ? Math.round((doneCount / total) * 100) : 0;
+              const health = t.health ?? "idle";
+              const attention =
+                t.p0Count > 0 ||
+                health === "blocked" ||
+                health === "stale" ||
+                health === "silent";
+              return (
+                <button
+                  key={t.boardId}
+                  type="button"
+                  className={`kb-portfolio-tile kb-portfolio-tile--${health}`}
+                  data-testid={`portfolio-tile-${t.boardId}`}
+                  data-health={health}
+                  onClick={() => openBoardFromPortfolio(t.boardId)}
+                >
+                  <div className="kb-portfolio-tile-top">
+                    <div className="kb-portfolio-ident">
+                      <div className="kb-portfolio-name">{t.title}</div>
+                      <div className="kb-portfolio-submeta">
+                        {total} cards · {colIds.length} columns
+                      </div>
+                    </div>
+                    <Chip
+                      base="kb-portfolio-health"
+                      variant={health}
+                      className={attention ? "is-attention" : undefined}
+                      data-testid={`portfolio-health-${t.boardId}`}
+                    >
+                      {health}
+                    </Chip>
+                  </div>
+
+                  <div className="kb-portfolio-progress">
+                    <div className="kb-portfolio-progress-head">
+                      <span className="kb-portfolio-progress-label">
+                        complete
+                      </span>
+                      <Chip base="kb-portfolio-pct">{pct}%</Chip>
+                    </div>
+                    <SegmentBar
+                      segments={colIds.map((id) => ({
+                        key: id,
+                        weight: t.columnCounts[id] ?? 0,
+                        color: tileAccents[id],
+                        title: `${columnLabel(id)}: ${t.columnCounts[id] ?? 0}`,
+                      }))}
+                    />
+                  </div>
+
+                  <div className="kb-portfolio-colstats">
+                    {colIds.map((id) => (
+                      <div key={id} className="kb-portfolio-colstat">
+                        <Dot color={tileAccents[id]} />
+                        <span className="kb-portfolio-colname">
+                          {columnLabel(id)}
+                        </span>
+                        <CountBadge
+                          className="kb-portfolio-colcount"
+                          value={t.columnCounts[id] ?? 0}
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Footer carries kanbanly's own signals — throughput,
+                      exceptions, who is working it — inside the design's
+                      single divided block rather than as stacked strips. */}
+                  <div className="kb-portfolio-foot">
+                    <div
+                      className="kb-portfolio-velocity"
+                      data-testid={`portfolio-vel-${t.boardId}`}
+                    >
+                      <span>{t.velocity?.done7d ?? 0} done/7d</span>
+                      <span>
+                        {t.velocity?.codeCommits7d == null
+                          ? "code —"
+                          : `${t.velocity.codeCommits7d} commits/7d`}
+                      </span>
+                      <span>
+                        {formatPulseAge(t.velocity?.pulseAgeHours ?? null)}
+                      </span>
+                      {t.velocity?.agentEvents7d ? (
+                        <span>{t.velocity.agentEvents7d} agent logs/7d</span>
+                      ) : null}
+                    </div>
+
+                    {/* Exceptions only — routine counts already read off the
+                        column stats above. */}
+                    {t.blockedCount > 0 ||
+                    t.staleDoingCount > 0 ||
+                    t.wipDoing?.over ||
+                    t.codeBound ? (
+                      <div className="kb-portfolio-badges">
+                        {t.blockedCount > 0 ? (
+                          <Chip base="kb-portfolio-badge" variant="blocked">
+                            {t.blockedCount} blocked
+                          </Chip>
+                        ) : null}
+                        {t.staleDoingCount > 0 ? (
+                          <Chip base="kb-portfolio-badge" variant="stale">
+                            {t.staleDoingCount} stale
+                          </Chip>
+                        ) : null}
+                        {t.wipDoing?.over ? (
+                          <Chip base="kb-portfolio-badge" variant="stale">
+                            WIP {t.wipDoing.count}/{t.wipDoing.limit}
+                          </Chip>
+                        ) : null}
+                        {t.codeBound ? (
+                          <Chip base="kb-portfolio-badge" variant="code">
+                            source
+                          </Chip>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    <div className="kb-portfolio-foot-row">
+                      <div className="kb-portfolio-avatars">
+                        {t.lastAgent ? (
+                          <Avatar
+                            name={t.lastAgent}
+                            title={`Last actor: ${t.lastAgent}`}
+                          />
+                        ) : null}
+                        {t.lastActivity ? (
+                          <span
+                            className="kb-portfolio-lastline"
+                            title={t.lastActivity.line}
+                          >
+                            {t.lastActivity.cardTitle}
+                          </span>
+                        ) : null}
+                      </div>
+                      <span className="kb-portfolio-risk">
+                        {t.p0Count > 0
+                          ? `${t.p0Count} × P0 open`
+                          : `${doneCount}/${total} done`}
+                      </span>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
           </div>
           {(portfolio?.activity?.length ?? 0) > 0 ? (
-            <section className="kb-portfolio-activity" data-testid="portfolio-activity">
-              <h3 className="kb-settings-section-title">Recent activity</h3>
-              <ul className="kb-activity-list">
-                {portfolio!.activity.slice(0, 20).map((e, i) => (
-                  <li key={`${e.boardId}-${e.cardId}-${i}`}>
-                    <span className="kb-activity-date">{e.date}</span>
-                    <button
-                      type="button"
-                      className="kb-activity-card"
-                      onClick={() => openBoardFromPortfolio(e.boardId)}
-                    >
-                      {e.boardTitle}
-                    </button>
-                    <span className="kb-muted">{e.cardTitle}</span>
-                    <span className="kb-activity-line">{e.line}</span>
-                  </li>
-                ))}
-              </ul>
-            </section>
+            <details className="kb-portfolio-activity" data-testid="portfolio-activity">
+              <summary className="kb-portfolio-activity-summary">
+                <span>Recent activity</span>
+                <CountBadge
+                  className="kb-portfolio-activity-count"
+                  value={portfolio!.activity.length}
+                />
+              </summary>
+              <DataTable
+                data={portfolioActivity}
+                columns={portfolioActivityColumns}
+                listClassName="kb-activity-list"
+                getRowId={(e, i) => `${e.boardId}-${e.cardId}-${i}`}
+                sortLabel="Sort recent activity"
+              />
+            </details>
           ) : null}
         </div>
       ) : null}
@@ -2928,17 +3647,16 @@ export function BoardApp() {
       {needsConnect || boards.length === 0 ? (
         <div className="kb-connect" data-testid="connect-wizard">
           <h2>Connect a boards repo</h2>
-          <p className="kb-muted">
+          <EmptyState>
             Paste a git remote URL (optional PAT) or a local path. Empty repos
             are scaffolded with a starter board.
-          </p>
+          </EmptyState>
           <form
             className="kb-connect-form"
             onSubmit={(e) => {
               e.preventDefault();
-              setConnectBusy(true);
-              setError(null);
-              connectRepo({
+              setLocalError(null);
+              connectRepoAsync({
                 url: connectUrl.trim() || undefined,
                 path: connectPath.trim() || undefined,
                 token: connectToken.trim() || undefined,
@@ -2949,14 +3667,22 @@ export function BoardApp() {
                     `Connected ${r.path} · ${r.boards.length} board(s), ${r.cardCount} card(s)`,
                   );
                   if (r.slug) setRemoteSlug(r.slug);
-                  if (r.remotes) setRemotes(r.remotes);
                   setConnectToken("");
-                  // Land on portfolio home (multi-project radar), not a random first board
-                  writeWindowBoardRoute(null, null, r.slug ?? null);
+                  // Land on portfolio home (multi-project radar), not a random
+                  // first board. formatBoardPath(null, …) is "/" whatever the
+                  // slug; see legacySlugReplace for the push/replace choice.
+                  navigateTo(
+                    {
+                      kind: "board",
+                      boardId: null,
+                      cardId: null,
+                      remoteSlug: null,
+                    },
+                    { replace: legacySlugReplace(r.slug) },
+                  );
                   await reload();
                 })
-                .catch((err) => setError(String(err)))
-                .finally(() => setConnectBusy(false));
+                .catch((err) => setLocalError(String(err)));
             }}
           >
             <label>
@@ -3016,7 +3742,7 @@ export function BoardApp() {
           <button
             type="button"
             data-testid="banner-offline-retry"
-            onClick={() => retrySync().then(setSync).catch((e) => setError(String(e)))}
+            onClick={() => void retrySyncAsync().catch((e) => setLocalError(String(e)))}
           >
             Retry push
           </button>
@@ -3036,16 +3762,17 @@ export function BoardApp() {
             data-testid="credential-form"
             onSubmit={(e) => {
               e.preventDefault();
-              setCredBusy(true);
-              setCredentials({ token: credToken, username: credUser || undefined })
-                .then(() => retrySync())
-                .then((s) => {
-                  setSync(s);
+              // The mutation saves the PAT and retries the push as one unit —
+              // a credential nobody has pushed with is not yet proven good.
+              setCredentialsAsync({
+                token: credToken,
+                username: credUser || undefined,
+              })
+                .then(() => {
                   setCredToken("");
                   setStatus("Credential saved — push retried");
                 })
-                .catch((err) => setError(String(err)))
-                .finally(() => setCredBusy(false));
+                .catch((err) => setLocalError(String(err)));
             }}
           >
             <label>
@@ -3078,7 +3805,7 @@ export function BoardApp() {
             <button
               type="button"
               data-testid="banner-credential-retry"
-              onClick={() => retrySync().then(setSync).catch((e) => setError(String(e)))}
+              onClick={() => void retrySyncAsync().catch((e) => setLocalError(String(e)))}
             >
               Retry only
             </button>
@@ -3125,18 +3852,12 @@ export function BoardApp() {
                       type="button"
                       data-testid={`keep-mine-${c.cardId}`}
                       onClick={() =>
-                        resolveConflict(c.boardId, c.cardId, "mine")
-                          .then(async (r) => {
-                            if (r.sync) setSync(r.sync);
-                            await refreshConflicts();
-                            await reload();
-                            setStatus(
-                              r.remaining === 0
-                                ? "All conflicts resolved — sync unfrozen"
-                                : `Kept mine · ${r.remaining} remaining`,
-                            );
-                          })
-                          .catch((e) => setError(String(e)))
+                        void onResolveConflict(
+                          c.boardId,
+                          c.cardId,
+                          "mine",
+                          "Kept mine",
+                        )
                       }
                     >
                       Keep mine
@@ -3145,18 +3866,12 @@ export function BoardApp() {
                       type="button"
                       data-testid={`keep-theirs-${c.cardId}`}
                       onClick={() =>
-                        resolveConflict(c.boardId, c.cardId, "theirs")
-                          .then(async (r) => {
-                            if (r.sync) setSync(r.sync);
-                            await refreshConflicts();
-                            await reload();
-                            setStatus(
-                              r.remaining === 0
-                                ? "All conflicts resolved — sync unfrozen"
-                                : `Kept theirs · ${r.remaining} remaining`,
-                            );
-                          })
-                          .catch((e) => setError(String(e)))
+                        void onResolveConflict(
+                          c.boardId,
+                          c.cardId,
+                          "theirs",
+                          "Kept theirs",
+                        )
                       }
                     >
                       Keep theirs
@@ -3165,18 +3880,12 @@ export function BoardApp() {
                       type="button"
                       data-testid={`keep-heal-${c.cardId}`}
                       onClick={() =>
-                        resolveConflict(c.boardId, c.cardId, "heal")
-                          .then(async (r) => {
-                            if (r.sync) setSync(r.sync);
-                            await refreshConflicts();
-                            await reload();
-                            setStatus(
-                              r.remaining === 0
-                                ? "All conflicts resolved — sync unfrozen"
-                                : `Healed · ${r.remaining} remaining`,
-                            );
-                          })
-                          .catch((e) => setError(String(e)))
+                        void onResolveConflict(
+                          c.boardId,
+                          c.cardId,
+                          "heal",
+                          "Healed",
+                        )
                       }
                     >
                       Heal merge
@@ -3198,9 +3907,9 @@ export function BoardApp() {
             type="button"
             data-testid="banner-conflict-unfreeze"
             onClick={() =>
-              clearSyncFreeze()
-                .then(setSync)
-                .catch((e) => setError(String(e)))
+              void clearSyncFreezeAsync().catch((e) =>
+                setLocalError(String(e)),
+              )
             }
           >
             Unfreeze sync
@@ -3208,7 +3917,7 @@ export function BoardApp() {
           <button
             type="button"
             data-testid="banner-conflict-retry"
-            onClick={() => retrySync().then(setSync).catch((e) => setError(String(e)))}
+            onClick={() => void retrySyncAsync().catch((e) => setLocalError(String(e)))}
           >
             Retry push
           </button>
@@ -3247,14 +3956,9 @@ export function BoardApp() {
                 {filterLabel ? ` · label:${filterLabel}` : ""}
                 {filterAssignee ? ` · @${filterAssignee}` : ""}
               </span>
-              <button
-                type="button"
-                className="kb-toolbar-btn"
-                data-testid="filter-clear"
-                onClick={clearFilters}
-              >
+              <ToolbarButton data-testid="filter-clear" onClick={clearFilters}>
                 Clear
-              </button>
+              </ToolbarButton>
             </div>
           ) : null}
 
@@ -3294,7 +3998,7 @@ export function BoardApp() {
                       {items.map((c) => (
                         <li key={c.id}>
                           <strong>{c.title}</strong>{" "}
-                          <span className="kb-card-id">{c.id}</span>
+                          <Chip base="kb-card-id">{c.id}</Chip>
                         </li>
                       ))}
                     </ul>
@@ -3367,6 +4071,7 @@ export function BoardApp() {
                     boardId={board.id}
                     columnId={col.id}
                     columnName={col.name}
+                    accent={colAccents[col.id]}
                     cards={displayCards}
                     onDropCard={onDropCard}
                     onOpenCard={(c) => {
@@ -3401,7 +4106,7 @@ export function BoardApp() {
             </div>
           </div>
         </>
-      ) : (
+      ) : showPortfolio ? null : (
         <p data-testid="empty-state">No boards connected.</p>
       )}
       </div>
@@ -3410,6 +4115,8 @@ export function BoardApp() {
         <DetailPanel
           card={board.cards.find((c) => c.id === selected.id) ?? selected}
           boardId={board.id}
+          accent={colAccents[(board.cards.find((c) => c.id === selected.id) ?? selected).column]}
+          commits={commitsByCard.get(selected.id.toLowerCase()) ?? []}
           onClose={() => setSelected(null)}
           onSave={onSaveDetail}
           busy={busy}
@@ -3455,7 +4162,7 @@ export function BoardApp() {
               rows={16}
               value={notesBody}
               disabled={notesBusy}
-              onChange={(e) => setNotesBody(e.target.value)}
+              onChange={(e) => setNotesDraft(e.target.value)}
               spellCheck
             />
             <div className="kb-card-modal-actions" style={{ marginTop: 12 }}>
@@ -3466,14 +4173,12 @@ export function BoardApp() {
                 disabled={notesBusy || busy}
                 style={{ width: "auto", minWidth: 120 }}
                 onClick={() => {
-                  setNotesBusy(true);
-                  putBoardNotes(boardId, notesBody)
+                  putBoardNotesAsync({ boardId, body: notesBody })
                     .then(() => {
                       setStatus("Saved project notes");
                       setShowNotes(false);
                     })
-                    .catch((e) => setError(String(e)))
-                    .finally(() => setNotesBusy(false));
+                    .catch((e) => setLocalError(String(e)));
                 }}
               >
                 Save notes
@@ -3515,68 +4220,93 @@ export function BoardApp() {
                 ×
               </button>
             </header>
-            <label className="kb-field">
-              Source remote URL
+            <Field label="Source remote URL">
               <input
                 data-testid="board-code-remote"
-                value={codeRemoteDraft}
+                value={codeRemote}
                 onChange={(e) => setCodeRemoteDraft(e.target.value)}
                 placeholder="https://github.com/you/app.git"
               />
-            </label>
-            <label className="kb-field">
-              Or local path
+            </Field>
+            <Field label="Or local path">
               <input
                 data-testid="board-code-path"
-                value={codePathDraft}
+                value={codePath}
                 onChange={(e) => setCodePathDraft(e.target.value)}
                 placeholder="/absolute/path/to/project"
               />
-            </label>
-            <label className="kb-field">
-              PAT (optional — uses board credential if empty)
+            </Field>
+            <Field label="Saved credential">
+              <select
+                data-testid="board-code-credential"
+                value={codeCredentialId}
+                onChange={(e) => setCodeCredentialDraft(e.target.value)}
+              >
+                <option value="">
+                  {credentialBook.length
+                    ? "— none (use board credential) —"
+                    : "— none saved —"}
+                </option>
+                {credentialBook.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label}
+                    {c.username ? ` (${c.username})` : ""}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Or paste a one-off PAT">
               <input
                 data-testid="board-code-token"
                 type="password"
                 autoComplete="off"
                 value={codeTokenDraft}
                 onChange={(e) => setCodeTokenDraft(e.target.value)}
-                placeholder="ghp_… fine-grained: Contents R/W"
+                placeholder="ghp_… fine-grained: Contents read"
               />
-            </label>
+            </Field>
+            <Field label="Watch instead of clone">
+              <label className="kb-code-watch">
+                <input
+                  type="checkbox"
+                  data-testid="board-code-watch"
+                  checked={codeWatch}
+                  onChange={(e) => setCodeWatchDraft(e.target.checked)}
+                />
+                <span>
+                  Read commits from the GitHub API — nothing is cloned to disk.
+                  Requires a github.com remote and a credential that can read it.
+                </span>
+              </label>
+            </Field>
             <div className="kb-card-modal-actions" style={{ marginBottom: 12 }}>
-              <button
-                type="button"
-                className="kb-toolbar-btn"
+              <ToolbarButton
                 data-testid="board-code-connect"
                 disabled={
-                  historyBusy ||
-                  (!codePathDraft.trim() && !codeRemoteDraft.trim())
+                  historyBusy || (!codePath.trim() && !codeRemote.trim())
                 }
                 onClick={() => {
-                  setHistoryBusy(true);
-                  const payload = {
-                    path: codePathDraft.trim() || undefined,
-                    url: codeRemoteDraft.trim() || undefined,
+                  // The mutation writes the echoed history into the same cache
+                  // slot this modal reads, then invalidates it, so the panel
+                  // paints once and reconciles once — not twice, as the
+                  // hand-rolled "set state, then re-GET, then set it again"
+                  // version did.
+                  bindCodeSourceAsync({
+                    boardId,
+                    path: codePath.trim() || undefined,
+                    url: codeRemote.trim() || undefined,
                     token: codeTokenDraft.trim() || undefined,
-                  };
-                  const run = codeRemoteDraft.trim()
-                    ? connectCodeSource(boardId, payload)
-                    : setCodeBinding(boardId, payload);
-                  run
+                    credentialId: codeCredentialId.trim() || undefined,
+                    watch: codeWatch || undefined,
+                    limit: PROJECT_HISTORY_LIMIT,
+                  })
                     .then((res) => {
-                      if (res.history) {
-                        setHistoryCommits(res.history.commits);
-                        setHistoryMeta({
-                          bound: res.history.bound,
-                          error: res.history.error,
-                          codePath: res.history.codePath,
-                        });
-                      }
-                      if (res.source?.path) {
-                        setCodePathDraft(res.source.path);
-                      }
                       setCodeTokenDraft("");
+                      // Hand the fields back to the server's answer.
+                      setCodePathDraft(null);
+                      setCodeRemoteDraft(null);
+                      setCodeCredentialDraft(null);
+                      setCodeWatchDraft(null);
                       setStatus(
                         res.source?.cloned
                           ? "Cloned source repo and linked History"
@@ -3584,84 +4314,37 @@ export function BoardApp() {
                             ? "Linked source repo for History"
                             : res.history?.error || "Source binding saved",
                       );
-                      return getCodeHistory(boardId);
                     })
-                    .then((r) => {
-                      setHistoryCommits(r.commits);
-                      setHistoryMeta({
-                        bound: r.bound,
-                        error: r.error,
-                        codePath: r.codePath,
-                      });
-                      if (r.binding?.path) setCodePathDraft(r.binding.path);
-                      if (r.binding?.remote) setCodeRemoteDraft(r.binding.remote);
-                    })
-                    .catch((e) => setError(String(e)))
-                    .finally(() => setHistoryBusy(false));
+                    .catch((e) => setLocalError(String(e)));
                 }}
               >
                 Connect source
-              </button>
+              </ToolbarButton>
             </div>
             {historyBusy ? (
-              <p className="kb-muted">Loading…</p>
-            ) : historyMeta && !historyMeta.bound ? (
-              <p className="kb-muted" data-testid="board-history-unbound">
-                {historyMeta.error ||
+              <EmptyState>Loading…</EmptyState>
+            ) : projectHistory && !projectHistory.bound ? (
+              <EmptyState testId="board-history-unbound">
+                {projectHistory.error ||
                   "No source code repo bound. Paste a remote URL (with PAT) or a local path."}
-              </p>
+              </EmptyState>
             ) : historyCommits.length === 0 ? (
-              <p className="kb-muted" data-testid="board-history-empty">
+              <EmptyState testId="board-history-empty">
                 No commits found in the bound project repo.
-              </p>
+              </EmptyState>
             ) : (
-              <ul className="kb-history-list" data-testid="board-history-list">
-                {historyCommits.map((c) => (
-                  <li key={c.sha} data-testid="project-commit">
-                    <code className="kb-history-sha">{c.sha.slice(0, 7)}</code>
-                    {c.url ? (
-                      <a
-                        className="kb-history-subj"
-                        href={c.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        data-testid="project-commit-link"
-                      >
-                        {c.subject}
-                      </a>
-                    ) : (
-                      <span className="kb-history-subj">{c.subject}</span>
-                    )}
-                    {c.cardIds && c.cardIds.length > 0 ? (
-                      <span className="kb-commit-cards">
-                        {c.cardIds.map((cid) => (
-                          <button
-                            key={cid}
-                            type="button"
-                            className="kb-linkish"
-                            data-testid={`commit-card-${cid}`}
-                            onClick={() => {
-                              const found = board?.cards.find(
-                                (x) => x.id.toLowerCase() === cid,
-                              );
-                              if (found) {
-                                setSelected(found);
-                                setFocusedCardId(found.id);
-                                setShowHistory(false);
-                              }
-                            }}
-                          >
-                            {cid}
-                          </button>
-                        ))}
-                      </span>
-                    ) : null}
-                    <span className="kb-muted">
-                      {c.author} · {c.date.slice(0, 10)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              <DataTable
+                data={historyCommits}
+                columns={projectCommitColumns}
+                listClassName="kb-history-list"
+                testId="board-history-list"
+                getRowId={(c) => c.sha}
+                rowTestId="project-commit"
+                hiddenColumns={COMMIT_HIDDEN_COLUMNS}
+                sortLabel="Sort project history"
+                filterPlaceholder="Search commits…"
+                filterTestId="board-history-filter"
+              />
             )}
           </div>
         </div>
@@ -3684,14 +4367,12 @@ export function BoardApp() {
               </strong>
             </div>
             <div className="kb-navbar-grow" aria-hidden="true" />
-            <button
-              type="button"
-              className="kb-toolbar-btn"
+            <ToolbarButton
               data-testid="settings-close"
               onClick={() => setShowSettings(false)}
             >
               ← board
-            </button>
+            </ToolbarButton>
           </header>
           <div className="kb-settings-shell">
             <nav className="kb-settings-nav" aria-label="Settings sections" data-testid="settings-nav">
@@ -3725,29 +4406,30 @@ export function BoardApp() {
             <div className="kb-settings-main">
             {settingsNav === "boards" ? (
             <section className="kb-settings-section" data-testid="settings-boards">
-              <div className="kb-settings-section-head">
-                <h3 className="kb-settings-section-title">boards</h3>
-                <button
-                  type="button"
-                  className="kb-toolbar-btn"
-                  data-testid="settings-add-board-toggle"
-                  onClick={() => {
-                    setShowAddBoard((v) => !v);
-                    if (!showAddBoard) {
-                      setNewBoardRemote(workspace?.activeRemote ?? "");
-                      setNewBoardUseNewRepo(
-                        !(workspace?.connections?.length),
-                      );
-                    }
-                  }}
-                >
-                  {showAddBoard ? "cancel" : "+ add board"}
-                </button>
-              </div>
-              <p className="kb-muted">
+              <SectionTitle
+                action={
+                  <ToolbarButton
+                    data-testid="settings-add-board-toggle"
+                    onClick={() => {
+                      setShowAddBoard((v) => !v);
+                      if (!showAddBoard) {
+                        setNewBoardRemote(workspace?.activeRemote ?? "");
+                        setNewBoardUseNewRepo(
+                          !(workspace?.connections?.length),
+                        );
+                      }
+                    }}
+                  >
+                    {showAddBoard ? "cancel" : "+ add board"}
+                  </ToolbarButton>
+                }
+              >
+                boards
+              </SectionTitle>
+              <EmptyState>
                 Configure each board here: credentials, git repository, and the
                 directory inside that repo (layout A). Expand a board to edit.
-              </p>
+              </EmptyState>
 
               {showAddBoard ? (
                 <div className="kb-disclose" data-testid="settings-add-board">
@@ -3816,23 +4498,20 @@ export function BoardApp() {
                   <p className="kb-disclose-step">
                     <span className="kb-disclose-step-n">3</span> Repository
                   </p>
-                  <div className="kb-seg-row" role="group" aria-label="Repository source">
-                    <button
-                      type="button"
-                      className={!newBoardUseNewRepo ? "is-on" : undefined}
-                      disabled={(workspace?.connections.length ?? 0) === 0}
-                      onClick={() => setNewBoardUseNewRepo(false)}
-                    >
-                      Existing repo
-                    </button>
-                    <button
-                      type="button"
-                      className={newBoardUseNewRepo ? "is-on" : undefined}
-                      onClick={() => setNewBoardUseNewRepo(true)}
-                    >
-                      New / enter repo
-                    </button>
-                  </div>
+                  <SegmentedControl
+                    className="kb-seg-row"
+                    label="Repository source"
+                    value={newBoardUseNewRepo ? "new" : "existing"}
+                    onChange={(v) => setNewBoardUseNewRepo(v === "new")}
+                    items={[
+                      {
+                        value: "existing",
+                        label: "Existing repo",
+                        disabled: (workspace?.connections.length ?? 0) === 0,
+                      },
+                      { value: "new", label: "New / enter repo" },
+                    ]}
+                  />
                   {!newBoardUseNewRepo ? (
                     <label>
                       Connected repository
@@ -3883,9 +4562,7 @@ export function BoardApp() {
                     </>
                   )}
 
-                  <button
-                    type="button"
-                    className="kb-toolbar-btn"
+                  <ToolbarButton
                     data-testid="settings-new-board-submit"
                     disabled={
                       !newBoardName.trim() ||
@@ -3912,17 +4589,28 @@ export function BoardApp() {
                     }}
                   >
                     Create board
-                  </button>
+                  </ToolbarButton>
                 </div>
               ) : null}
 
-              <ul className="kb-disclose-list" data-testid="settings-board-list">
-                {(workspace?.boards ?? []).map((b) => {
+              <DataTable
+                data={workspaceBoards}
+                columns={WORKSPACE_BOARD_COLUMNS}
+                listClassName="kb-disclose-list"
+                testId="settings-board-list"
+                getRowId={(b) => b.key}
+                rowClassName={(b) =>
+                  expandedBoardKey === b.key ? "is-open" : undefined
+                }
+                sortLabel="Sort boards"
+                filterPlaceholder="Search boards…"
+                filterTestId="settings-board-filter"
+                renderRow={(b) => {
                   const open = expandedBoardKey === b.key;
                   const draft =
                     editBoardDraft?.key === b.key ? editBoardDraft : null;
                   return (
-                    <li key={b.key} className={open ? "is-open" : undefined}>
+                    <>
                       <button
                         type="button"
                         className="kb-disclose-row"
@@ -4034,12 +4722,12 @@ export function BoardApp() {
                               </code>
                             </div>
                           </div>
-                          <p className="kb-muted">
+                          <EmptyState>
                             To attach a different git remote URL, use{" "}
                             <strong>Repositories</strong> below (or add a new
                             connection), then select it here. Board files live
                             under the chosen clone.
-                          </p>
+                          </EmptyState>
 
                           <p className="kb-disclose-step">
                             <span className="kb-disclose-step-n">3</span>{" "}
@@ -4079,18 +4767,14 @@ export function BoardApp() {
                           </span>
 
                           <div className="kb-settings-actions">
-                            <button
-                              type="button"
-                              className="kb-toolbar-btn"
+                            <ToolbarButton
                               data-testid={`settings-board-save-${b.boardId}`}
                               disabled={busy}
                               onClick={() => void saveBoardEditor()}
                             >
                               Save board config
-                            </button>
-                            <button
-                              type="button"
-                              className="kb-toolbar-btn"
+                            </ToolbarButton>
+                            <ToolbarButton
                               onClick={() => {
                                 if (
                                   b.remoteSlug !== workspace?.activeRemote
@@ -4102,15 +4786,13 @@ export function BoardApp() {
                                 } else {
                                   reload(b.boardId)
                                     .then(() => setShowSettings(false))
-                                    .catch((e) => setError(String(e)));
+                                    .catch((e) => setLocalError(String(e)));
                                 }
                               }}
                             >
                               Open board
-                            </button>
-                            <button
-                              type="button"
-                              className="kb-toolbar-btn"
+                            </ToolbarButton>
+                            <ToolbarButton
                               data-testid="pull-remote"
                               disabled={busy}
                               onClick={() => {
@@ -4127,41 +4809,42 @@ export function BoardApp() {
                               }}
                             >
                               Fetch / sync
-                            </button>
+                            </ToolbarButton>
                           </div>
                         </div>
                       ) : null}
-                    </li>
+                    </>
                   );
-                })}
-              </ul>
+                }}
+              />
               {(workspace?.boards.length ?? 0) === 0 ? (
-                <p className="kb-muted">
+                <EmptyState>
                   No boards yet — use <strong>+ add board</strong> to create one
                   and attach a repository.
-                </p>
+                </EmptyState>
               ) : null}
             </section>
             ) : null}
 
             {settingsNav === "repositories" ? (
             <section className="kb-settings-section" data-testid="settings-remotes">
-              <div className="kb-settings-section-head">
-                <h3 className="kb-settings-section-title">repositories</h3>
-                <button
-                  type="button"
-                  className="kb-toolbar-btn"
-                  data-testid="settings-add-connection-toggle"
-                  onClick={() => setShowAddConnection((v) => !v)}
-                >
-                  {showAddConnection ? "cancel" : "+ add repository"}
-                </button>
-              </div>
-              <p className="kb-muted">
+              <SectionTitle
+                action={
+                  <ToolbarButton
+                    data-testid="settings-add-connection-toggle"
+                    onClick={() => setShowAddConnection((v) => !v)}
+                  >
+                    {showAddConnection ? "cancel" : "+ add repository"}
+                  </ToolbarButton>
+                }
+              >
+                repositories
+              </SectionTitle>
+              <EmptyState>
                 Git clones available for boards. Prefer configuring repo +
                 credentials on each <strong>board</strong> above; manage shared
                 clones and default credentials here.
-              </p>
+              </EmptyState>
 
               {showAddConnection ? (
                 <form
@@ -4169,9 +4852,8 @@ export function BoardApp() {
                   data-testid="settings-add-connection"
                   onSubmit={(e) => {
                     e.preventDefault();
-                    setConnectBusy(true);
-                    setError(null);
-                    connectRepo({
+                    setLocalError(null);
+                    connectRepoAsync({
                       url: connectUrl.trim() || undefined,
                       path: connectPath.trim() || undefined,
                       token: connectToken.trim() || undefined,
@@ -4180,10 +4862,9 @@ export function BoardApp() {
                       .then(async (r) => {
                         setStatus(`Connected ${r.path}`);
                         if (r.slug) setRemoteSlug(r.slug);
-                        if (r.remotes) setRemotes(r.remotes);
                         if (connectToken.trim()) {
                           try {
-                            await upsertCredentialBook({
+                            await upsertCredentialAsync({
                               label:
                                 connectUrl.trim() ||
                                 connectPath.trim() ||
@@ -4196,11 +4877,9 @@ export function BoardApp() {
                         }
                         setConnectToken("");
                         await reload(r.boards[0]?.id);
-                        await refreshWorkspace();
                         setShowAddConnection(false);
                       })
-                      .catch((err) => setError(String(err)))
-                      .finally(() => setConnectBusy(false));
+                      .catch((err) => setLocalError(String(err)));
                   }}
                 >
                   <label>
@@ -4233,11 +4912,20 @@ export function BoardApp() {
                 </form>
               ) : null}
 
-              <ul className="kb-disclose-list" data-testid="remote-sidebar">
-                {(workspace?.connections ?? []).map((r) => {
+              <DataTable
+                data={workspaceConnections}
+                columns={WORKSPACE_CONNECTION_COLUMNS}
+                listClassName="kb-disclose-list"
+                testId="remote-sidebar"
+                getRowId={(r) => r.id}
+                rowClassName={(r) =>
+                  expandedConnectionId === r.id ? "is-open" : undefined
+                }
+                sortLabel="Sort repositories"
+                renderRow={(r) => {
                   const open = expandedConnectionId === r.id;
                   return (
-                    <li key={r.id} className={open ? "is-open" : undefined}>
+                    <>
                       <button
                         type="button"
                         className="kb-disclose-row"
@@ -4279,12 +4967,10 @@ export function BoardApp() {
                               value={r.defaultCredentialId ?? ""}
                               onChange={(e) => {
                                 const v = e.target.value;
-                                void patchConnection({
+                                void patchConnectionAsync({
                                   id: r.id,
                                   defaultCredentialId: v === "" ? null : v,
-                                })
-                                  .then(() => refreshWorkspace())
-                                  .catch((err) => setError(String(err)));
+                                }).catch((err) => setLocalError(String(err)));
                               }}
                             >
                               <option value="">None / SSH agent</option>
@@ -4296,45 +4982,40 @@ export function BoardApp() {
                             </select>
                           </label>
                           <div className="kb-settings-actions">
-                            <button
-                              type="button"
-                              className="kb-toolbar-btn"
+                            <ToolbarButton
                               disabled={r.active || busy}
-                              onClick={() =>
-                                void switchRemote(r.id).then(() =>
-                                  refreshWorkspace(),
-                                )
-                              }
+                              onClick={() => void switchRemote(r.id)}
                             >
                               {r.active ? "active" : "set active"}
-                            </button>
+                            </ToolbarButton>
                           </div>
                         </div>
                       ) : null}
-                    </li>
+                    </>
                   );
-                })}
-              </ul>
+                }}
+              />
             </section>
             ) : null}
 
             {settingsNav === "credentials" ? (
             <section className="kb-settings-section" data-testid="settings-credentials">
-              <div className="kb-settings-section-head">
-                <h3 className="kb-settings-section-title">credentials</h3>
-                <button
-                  type="button"
-                  className="kb-toolbar-btn"
-                  data-testid="settings-add-cred-toggle"
-                  onClick={() => setShowAddCredential((v) => !v)}
-                >
-                  {showAddCredential ? "cancel" : "+ add credential"}
-                </button>
-              </div>
-              <p className="kb-muted">
+              <SectionTitle
+                action={
+                  <ToolbarButton
+                    data-testid="settings-add-cred-toggle"
+                    onClick={() => setShowAddCredential((v) => !v)}
+                  >
+                    {showAddCredential ? "cancel" : "+ add credential"}
+                  </ToolbarButton>
+                }
+              >
+                credentials
+              </SectionTitle>
+              <EmptyState>
                 Named HTTPS PATs (encrypted under ~/.kanbanly/). Assign per
                 board or as a connection default. SSH still uses your agent.
-              </p>
+              </EmptyState>
 
               {showAddCredential ? (
                 <div className="kb-disclose" data-testid="settings-add-cred">
@@ -4364,13 +5045,11 @@ export function BoardApp() {
                       data-testid="settings-cred-token"
                     />
                   </label>
-                  <button
-                    type="button"
-                    className="kb-toolbar-btn"
+                  <ToolbarButton
                     data-testid="settings-cred-submit"
                     disabled={!newCredLabel.trim() || !newCredToken.trim()}
                     onClick={() => {
-                      void upsertCredentialBook({
+                      void upsertCredentialAsync({
                         label: newCredLabel.trim(),
                         username: newCredUser.trim() || "x-access-token",
                         token: newCredToken.trim(),
@@ -4379,58 +5058,59 @@ export function BoardApp() {
                           setNewCredLabel("");
                           setNewCredToken("");
                           setShowAddCredential(false);
-                          return refreshWorkspace();
                         })
-                        .catch((e) => setError(String(e)));
+                        .catch((e) => setLocalError(String(e)));
                     }}
                   >
                     Save credential
-                  </button>
+                  </ToolbarButton>
                 </div>
               ) : null}
 
-              <ul className="kb-disclose-list">
-                {(workspace?.credentials ?? []).map((c) => (
-                  <li key={c.id}>
-                    <div className="kb-disclose-row kb-disclose-row--static">
-                      <span className="kb-disclose-row-main">
-                        <strong>{c.label}</strong>
-                        <span className="kb-muted">
-                          {c.username} · {c.id} ·{" "}
-                          {new Date(c.updatedAt).toLocaleString()}
-                        </span>
+              <DataTable
+                data={workspaceCredentials}
+                columns={WORKSPACE_CREDENTIAL_COLUMNS}
+                listClassName="kb-disclose-list"
+                testId="settings-cred-list"
+                getRowId={(c) => c.id}
+                sortLabel="Sort credentials"
+                renderRow={(c) => (
+                  <div className="kb-disclose-row kb-disclose-row--static">
+                    <span className="kb-disclose-row-main">
+                      <strong>{c.label}</strong>
+                      <span className="kb-muted">
+                        {c.username} · {c.id} ·{" "}
+                        {new Date(c.updatedAt).toLocaleString()}
                       </span>
-                      <button
-                        type="button"
-                        className="kb-toolbar-btn"
-                        data-testid={`settings-cred-delete-${c.id}`}
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              `Delete credential “${c.label}”? Boards using it fall back to connection default.`,
-                            )
-                          ) {
-                            void deleteCredentialBook(c.id)
-                              .then(() => refreshWorkspace())
-                              .catch((e) => setError(String(e)));
-                          }
-                        }}
-                      >
-                        delete
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+                    </span>
+                    <ToolbarButton
+                      data-testid={`settings-cred-delete-${c.id}`}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `Delete credential “${c.label}”? Boards using it fall back to connection default.`,
+                          )
+                        ) {
+                          void deleteCredentialAsync(c.id).catch((e) =>
+                            setLocalError(String(e)),
+                          );
+                        }
+                      }}
+                    >
+                      delete
+                    </ToolbarButton>
+                  </div>
+                )}
+              />
               {(workspace?.credentials.length ?? 0) === 0 ? (
-                <p className="kb-muted">No named credentials yet.</p>
+                <EmptyState>No named credentials yet.</EmptyState>
               ) : null}
             </section>
             ) : null}
 
             {settingsNav === "filters" ? (
             <section className="kb-settings-section">
-              <h3 className="kb-settings-section-title">filters</h3>
+              <SectionTitle>filters</SectionTitle>
               <div className="kb-settings-filters">
                 <label>
                   Label
@@ -4468,71 +5148,49 @@ export function BoardApp() {
 
             {settingsNav === "theme" ? (
             <section className="kb-settings-section">
-              <h3 className="kb-settings-section-title">theme</h3>
-              <div className="kb-theme-switch" role="group" aria-label="Theme">
-                {(
-                  [
-                    ["light", "light"],
-                    ["dark", "dark"],
-                    ["system", "auto"],
-                  ] as const
-                ).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    aria-pressed={themePref === value}
-                    onClick={() => setThemePref(value)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+              <SectionTitle>theme</SectionTitle>
+              <SegmentedControl
+                className="kb-theme-switch"
+                label="Theme"
+                // This strip marks its active segment with aria-pressed, not
+                // `.is-on` — styles.css targets `button[aria-pressed="true"]`.
+                marker="aria-pressed"
+                value={themePref}
+                onChange={setThemePref}
+                items={[
+                  { value: "light", label: "light" },
+                  { value: "dark", label: "dark" },
+                  { value: "system", label: "auto" },
+                ]}
+              />
             </section>
             ) : null}
 
             {settingsNav === "activity" ? (
             <section className="kb-settings-section" data-testid="settings-activity">
-              <div className="kb-settings-section-head">
-                <h3 className="kb-settings-section-title">activity</h3>
-              </div>
-              <p className="kb-muted">
+              {/* Head row with no action: the rule belongs on the row, so the
+                  wrapper is requested explicitly. */}
+              <SectionTitle head>activity</SectionTitle>
+              <EmptyState>
                 Recent card log entries from the open board.
-              </p>
+              </EmptyState>
               <div
                 className="kb-activity kb-activity--settings"
                 data-testid="activity-feed"
               >
                 {activity.length === 0 ? (
-                  <p className="kb-empty">No log entries yet.</p>
+                  <EmptyState tone="empty">No log entries yet.</EmptyState>
                 ) : (
-                  <ul className="kb-activity-list">
-                    {activity.map((e, i) => (
-                      <li
-                        key={`${e.cardId}-${e.date}-${i}`}
-                        data-testid="activity-item"
-                      >
-                        <span className="kb-activity-date">{e.date}</span>
-                        <button
-                          type="button"
-                          className="kb-activity-card"
-                          data-testid={`activity-card-${e.cardId}`}
-                          onClick={() => {
-                            const c = board?.cards.find(
-                              (x) => x.id === e.cardId,
-                            );
-                            if (c) {
-                              setFocusedCardId(c.id);
-                              setSelected(c);
-                              setShowSettings(false);
-                            }
-                          }}
-                        >
-                          {e.cardTitle || e.cardId}
-                        </button>
-                        <span className="kb-activity-line">{e.line}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  <DataTable
+                    data={activity}
+                    columns={activityColumns}
+                    listClassName="kb-activity-list"
+                    getRowId={(e, i) => `${e.cardId}-${e.date}-${i}`}
+                    rowTestId="activity-item"
+                    sortLabel="Sort activity"
+                    filterPlaceholder="Search activity…"
+                    filterTestId="activity-filter"
+                  />
                 )}
               </div>
             </section>

@@ -20,7 +20,7 @@ import {
   type Board,
   type BoardColumn,
 } from "../board.ts";
-import { parseCard, serializeCard, type Card } from "../card.ts";
+import { parseCard, serializeCard, type Card, type ChecklistItem } from "../card.ts";
 import {
   extractConflictSides,
   hasConflictMarkers,
@@ -184,6 +184,82 @@ export class GitStorage implements BoardStorage {
 
   git(args: string[]): { ok: boolean; stdout: string; stderr: string; code: number } {
     return runGit(this.repoPath, args);
+  }
+
+  /**
+   * Run git WITH the stored HTTPS credential. Anything that talks to the remote
+   * must use this: plain `git()` has no auth env, so on a private repo a fetch
+   * fails with "could not read Username" — and because callers treat fetch
+   * failure as "offline", that failure is invisible.
+   */
+  gitAuthed(args: string[]): { ok: boolean; stdout: string; stderr: string; code: number } {
+    return runGit(this.repoPath, args, { env: this.authEnv() });
+  }
+
+  /**
+   * Fetch origin and fast-forward the current branch. Returns whether HEAD
+   * moved, plus the error when the remote could not be reached — callers can
+   * then report a real failure instead of silently reporting "no changes".
+   */
+  fetchAndFastForward(): {
+    ok: boolean;
+    changed: boolean;
+    sha: string;
+    error?: string;
+    /** Local commits not on the remote. */
+    ahead?: number;
+    /** Remote commits not applied locally. */
+    behind?: number;
+    /** True when both are non-zero: --ff-only cannot reconcile it. */
+    diverged?: boolean;
+  } {
+    const before = this.headSha();
+    const remotes = this.git(["remote"]);
+    if (!remotes.ok || !remotes.stdout.includes("origin")) {
+      return { ok: true, changed: false, sha: before };
+    }
+    const fetched = this.gitAuthed(["fetch", "origin", "--prune"]);
+    if (!fetched.ok) {
+      return {
+        ok: false,
+        changed: false,
+        sha: before,
+        error: (fetched.stderr || fetched.stdout || "fetch failed").trim(),
+      };
+    }
+    const branch = this.git(["rev-parse", "--abbrev-ref", "HEAD"]);
+    const name = branch.ok ? branch.stdout.trim() : "";
+    if (name && name !== "HEAD") {
+      this.gitAuthed(["merge", "--ff-only", `origin/${name}`]);
+    }
+    const after = this.headSha();
+
+    // Report divergence explicitly. A branch that is both ahead and behind
+    // cannot fast-forward, so it would otherwise look identical to "already up
+    // to date" while the remote's commits never arrive.
+    let ahead = 0;
+    let behind = 0;
+    if (name && name !== "HEAD") {
+      const counts = this.git([
+        "rev-list",
+        "--left-right",
+        "--count",
+        `HEAD...origin/${name}`,
+      ]);
+      if (counts.ok) {
+        const [a, b] = counts.stdout.trim().split(/\s+/).map((n) => Number(n) || 0);
+        ahead = a ?? 0;
+        behind = b ?? 0;
+      }
+    }
+    return {
+      ok: true,
+      changed: after !== before,
+      sha: after,
+      ahead,
+      behind,
+      diverged: ahead > 0 && behind > 0,
+    };
   }
 
   headSha(): string {
@@ -1025,6 +1101,7 @@ export class GitStorage implements BoardStorage {
       priority?: string | null;
       column?: string;
       order?: string;
+      checklist?: ChecklistItem[];
     },
     options?: { actor?: string; message?: string },
   ): Promise<StorageResult<{ sha?: string; card: Card }>> {
@@ -1062,6 +1139,16 @@ export class GitStorage implements BoardStorage {
     if (patch.status !== undefined && patch.status !== card.status) {
       card.status = patch.status;
       changes.push("status");
+    }
+    if (patch.checklist !== undefined) {
+      const before = card.checklist ?? [];
+      const doneBefore = before.filter((i) => i.done).length;
+      const doneAfter = patch.checklist.filter((i) => i.done).length;
+      card.checklist = patch.checklist;
+      // Log the ratio so the Log stays a readable audit trail of progress.
+      changes.push(
+        `checklist ${doneBefore}/${before.length}→${doneAfter}/${patch.checklist.length}`,
+      );
     }
 
     card.frontmatter.updated = nowIso();
@@ -1165,6 +1252,7 @@ export class GitStorage implements BoardStorage {
         labels: [],
       },
       status: "_Not started._",
+      checklist: [],
       log: [`${today()} ${actor}: created`],
     };
     const w = await this.writeCard(boardId, card, {
@@ -1449,9 +1537,12 @@ export class GitStorage implements BoardStorage {
     const branch = this.currentBranch();
     let lastErr = "";
     let lastFiles: string[] | undefined;
-    const auth = this.authEnv();
 
     for (let attempt = 0; attempt <= this.maxPushRetries; attempt++) {
+      // Read the credential per attempt rather than snapshotting it once: a
+      // reconnect can bind one between retries, and a queued push should pick
+      // it up instead of failing for the lifetime of the process.
+      const auth = this.authEnv();
       const push = runGit(
         this.repoPath,
         ["push", "-u", "origin", `HEAD:refs/heads/${branch}`],
@@ -1468,9 +1559,25 @@ export class GitStorage implements BoardStorage {
         /non-fast-forward|fetch first|rejected|\[rejected\]|behind/i.test(lastErr) &&
         attempt < this.maxPushRetries
       ) {
-        // Fetch first so origin/<branch> is available, then rebase onto it
+        // Fetch first so origin/<branch> is available, then rebase onto it.
+        // Both talk to the remote, so BOTH need the credential — `git()` has no
+        // auth env, which made this pull die with "could not read Username"
+        // even though the push beside it was authenticated.
         runGit(this.repoPath, ["fetch", "origin", branch], { env: auth });
-        const pull = this.git(["pull", "--rebase", "origin", branch]);
+        // A rebase writes commits, so it needs an identity. Cloned repos never
+        // got one (it is only set on `git init`), and unlike commitAll this path
+        // did not pass it inline — so the rebase died with "Committer identity
+        // unknown" the moment auth started working.
+        const pull = this.gitAuthed([
+          "-c",
+          `user.name=${this.authorName}`,
+          "-c",
+          `user.email=${this.authorEmail}`,
+          "pull",
+          "--rebase",
+          "origin",
+          branch,
+        ]);
         if (!pull.ok) {
           const out = `${pull.stderr}\n${pull.stdout}`;
           const files = this.divergedFiles(out);

@@ -14,6 +14,7 @@ export type IndexedCard = {
   pr?: string;
   branch?: string;
   status: string;
+  checklist: Array<{ text: string; done: boolean }>;
   log: string[];
   updated: string;
   filename?: string;
@@ -74,6 +75,7 @@ function toIndexedCard(card: Card, ref?: { filename?: string; path?: string }): 
     pr: fm.pr,
     branch: fm.branch,
     status: card.status,
+    checklist: card.checklist ?? [],
     log: card.log,
     updated: fm.updated,
     filename: ref?.filename,

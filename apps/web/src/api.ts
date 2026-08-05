@@ -2,6 +2,8 @@
 
 export type BoardColumn = { id: string; name: string };
 
+export type ChecklistItem = { text: string; done: boolean };
+
 export type BoardCard = {
   id: string;
   title: string;
@@ -14,6 +16,7 @@ export type BoardCard = {
   pr?: string;
   branch?: string;
   status?: string;
+  checklist?: ChecklistItem[];
   log?: string[];
   updated?: string;
   filename?: string;
@@ -110,6 +113,8 @@ export async function connectRepo(input: {
   url?: string;
   token?: string;
   username?: string;
+  /** Reuse a saved credential instead of pasting a token. */
+  credentialId?: string;
   scaffold?: boolean;
   board?: string;
 }): Promise<ConnectResult> {
@@ -380,6 +385,18 @@ export type WorkspaceSnapshot = {
   activeRemote: string | null;
 };
 
+/** Force a fetch + reindex now rather than waiting for the 15s poll. */
+export async function refreshRepo(): Promise<{
+  ok: boolean;
+  changed: boolean;
+  sha: string;
+  previousSha: string;
+}> {
+  const res = await fetch("/api/refresh", { method: "POST" });
+  if (!res.ok) throw new Error(`refresh failed: ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
 export async function getWorkspace(): Promise<WorkspaceSnapshot> {
   const res = await fetch("/api/workspace");
   if (!res.ok) throw new Error(`getWorkspace failed: ${res.status}`);
@@ -645,7 +662,12 @@ export type CodeHistoryResponse = {
   boardId: string;
   source: "code";
   bound: boolean;
-  binding: { path?: string; remote?: string } | null;
+  binding: {
+    path?: string;
+    remote?: string;
+    watch?: boolean;
+    credentialId?: string;
+  } | null;
   codePath: string | null;
   error: string | null;
   commits: ProjectCommit[];
@@ -674,6 +696,8 @@ export async function setCodeBinding(
     token?: string;
     username?: string;
     credentialId?: string;
+    /** Read commits via the GitHub API instead of cloning. */
+    watch?: boolean;
   },
 ): Promise<{
   ok: boolean;
@@ -894,6 +918,7 @@ export type CardUpdate = {
   priority?: string | null;
   column?: string;
   order?: string;
+  checklist?: ChecklistItem[];
 };
 
 export async function updateCard(

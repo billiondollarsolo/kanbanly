@@ -15,6 +15,10 @@ import {
   formatFleetDigest,
   ensureCodeRepo,
   extractCardIdsFromText,
+  watchGitHubCommits,
+  parseGitHubRemote,
+  resolveCodeBinding,
+  type ProjectCommit,
   fetchPrStatus,
   githubCommitUrl,
   isDoingColumn,
@@ -80,6 +84,55 @@ function json(data: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
+}
+
+/** True when this board is bound in watch mode (no clone should be probed). */
+function isWatchBinding(connected: unknown, boardId: string): boolean {
+  try {
+    const storage = (connected as { storage?: unknown }).storage as {
+      readBoardSync?: (id: string) => { ok: boolean; value?: { settings?: Record<string, unknown> } };
+    };
+    const r = storage.readBoardSync?.(boardId);
+    if (!r || !r.ok) return false;
+    return resolveCodeBinding(r.value?.settings)?.watch === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pick a credential that can read this repo. Watch mode only ever needs read
+ * access, so any stored credential for the host will do; private repos simply
+ * return no commits without one.
+ */
+function resolveWatchToken(
+  book: { list: () => Array<{ id: string }>; get: (id: string) => { token?: string } | null },
+  remote: string,
+  credentialId?: string,
+): string | null {
+  if (!parseGitHubRemote(remote)) return null;
+  // A board naming its credential wins — that is the point of saving one.
+  if (credentialId?.trim()) {
+    try {
+      const named = book.get(credentialId.trim());
+      if (named?.token) return named.token;
+    } catch {
+      /* fall through to the looser lookups */
+    }
+  }
+  if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN;
+  // Last resort: a single saved credential is unambiguous. More than one and we
+  // refuse to guess, so a board without an explicit credentialId stays honest.
+  try {
+    const all = book.list();
+    if (all.length === 1) {
+      const only = book.get(all[0]!.id);
+      if (only?.token) return only.token;
+    }
+  } catch {
+    /* ignore — watch degrades to unauthenticated */
+  }
+  return null;
 }
 
 function html(body: string, status = 200): Response {
@@ -343,7 +396,10 @@ export function createHandler(options: AppOptions = {}) {
     if (credentials.has()) {
       next.storage.setCredential(credentials.get());
     }
-    applyResolvedCredential(entry.slug);
+    // Record the connection BEFORE resolving its credential. The resolver reads
+    // defaultCredentialId off the stored connection, so running it first meant a
+    // first-time connect always resolved null and left the storage — and the
+    // push queue built from it — with no credential at all.
     workspace.upsertConnection({
       id: entry.slug,
       label: entry.label,
@@ -353,6 +409,7 @@ export function createHandler(options: AppOptions = {}) {
         workspace.get().connections.find((c) => c.id === entry.slug)
           ?.defaultCredentialId ?? null,
     });
+    applyResolvedCredential(entry.slug);
     for (const b of entry.connected.index.boards) {
       const existing = workspace.getBoard(entry.slug, b.id);
       workspace.upsertBoard({
@@ -485,6 +542,8 @@ export function createHandler(options: AppOptions = {}) {
         scaffold?: boolean;
         board?: string;
         cloneDir?: string;
+        /** Reuse a saved credential from the credential book. */
+        credentialId?: string;
       };
       try {
         body = (await req.json()) as typeof body;
@@ -492,12 +551,15 @@ export function createHandler(options: AppOptions = {}) {
         return json({ error: "invalid json" }, 400);
       }
 
-      const credential =
-        body.token?.trim()
-          ? {
-              token: body.token.trim(),
-              username: body.username?.trim() || "x-access-token",
-            }
+      // A pasted token wins; otherwise reuse a saved credential by id, so the
+      // book is the single place a PAT is entered.
+      const credential = body.token?.trim()
+        ? {
+            token: body.token.trim(),
+            username: body.username?.trim() || "x-access-token",
+          }
+        : body.credentialId?.trim()
+          ? credentialBook.get(body.credentialId.trim())
           : null;
 
       try {
@@ -524,6 +586,24 @@ export function createHandler(options: AppOptions = {}) {
           );
         }
         const entry = attachConnected(next);
+        // Remember WHICH saved credential this connection uses. Without this the
+        // credentialId authenticates the initial clone and is then forgotten,
+        // so every later fetch and push runs unauthenticated and fails with
+        // "could not read Username" — silently, because fetch failure is
+        // treated as "offline".
+        if (body.credentialId?.trim()) {
+          const existing = workspace
+            .get()
+            .connections.find((c) => c.id === entry.slug);
+          workspace.upsertConnection({
+            id: entry.slug,
+            label: existing?.label ?? entry.label,
+            localPath: next.path,
+            remoteUrl: next.remoteUrl ?? null,
+            defaultCredentialId: body.credentialId.trim(),
+          });
+          applyResolvedCredential(entry.slug);
+        }
         return json({
           ok: true,
           connected: true,
@@ -665,6 +745,29 @@ export function createHandler(options: AppOptions = {}) {
     }
 
     // Credential status (never returns secret) — legacy single store + book
+    // POST /api/refresh — force a fetch + reindex now, instead of waiting for
+    // the 15s poll. Broadcasts to SSE clients so every open tab repaints.
+    if (method === "POST" && path === "/api/refresh") {
+      if (!connected) return notFound("No repo connected");
+      const before = connected.storage.headSha();
+      const result = await live?.tick();
+      const after = connected.storage.headSha();
+      if (!live) {
+        // Live poller disabled: still do the work synchronously.
+        await refreshRepo(connected, { indexStore, force: true });
+      }
+      return json({
+        ok: true,
+        changed: result?.changed ?? before !== after,
+        sha: after || before,
+        previousSha: before,
+        boards: indexStore.get(connected.remoteKey)?.boards?.length ?? null,
+        // Non-null when the remote could not be reached — otherwise a failed
+        // fetch looks identical to "already up to date".
+        fetchError: live?.lastFetchErrorPublic || null,
+      });
+    }
+
     if (method === "GET" && path === "/api/credentials") {
       return json({
         ...(credentials?.status() ?? { configured: false }),
@@ -1520,6 +1623,8 @@ export function createHandler(options: AppOptions = {}) {
       const limit = limitParam ? Number(limitParam) : 50;
       const hist = connected.storage.codeHistory(boardId, {
         limit: Number.isFinite(limit) ? limit : 50,
+        // Watch mode must never touch (or create) a managed clone.
+        allowManagedClone: !isWatchBinding(connected, boardId),
       });
       if (!hist.ok) {
         return json(
@@ -1528,6 +1633,36 @@ export function createHandler(options: AppOptions = {}) {
         );
       }
       const binding = hist.value.binding;
+
+      // Watch mode: read commit metadata from the GitHub API, keeping zero
+      // local state. Falls through to the git-log result on failure.
+      if (binding?.watch && binding.remote) {
+        const watched = await watchGitHubCommits({
+          remote: binding.remote,
+          token: resolveWatchToken(credentialBook, binding.remote, binding.credentialId),
+          limit: Number.isFinite(limit) ? limit : 50,
+        });
+        const board = indexStore.getBoard(connected.remoteKey, boardId);
+        const ids = new Set((board?.cards ?? []).map((c) => c.id.toLowerCase()));
+        return json({
+          boardId,
+          source: "code",
+          mode: "watch",
+          bound: watched.ok,
+          binding,
+          codePath: null,
+          error: watched.ok ? null : watched.error,
+          rateRemaining: watched.rateRemaining ?? null,
+          commits: watched.commits.map((c: ProjectCommit) => ({
+            ...c,
+            url: githubCommitUrl(binding.remote, c.sha),
+            cardIds: extractCardIdsFromText(c.subject).filter((id) =>
+              ids.has(id),
+            ),
+          })),
+          count: watched.commits.length,
+        });
+      }
       const remote = binding?.remote;
       const board = indexStore.getBoard(connected.remoteKey, boardId);
       const cardIdSet = new Set(
@@ -1581,6 +1716,8 @@ export function createHandler(options: AppOptions = {}) {
         username?: string;
         credentialId?: string;
         fetch?: boolean;
+        /** Read commits from the forge API; never clone. */
+        watch?: boolean;
       }>(req);
 
       if (body?.clear) {
@@ -1628,8 +1765,19 @@ export function createHandler(options: AppOptions = {}) {
         cloned: boolean;
         fetched: boolean;
       } | null = null;
+      const wantsWatch = body?.watch === true;
+      if (wantsWatch && !remote) {
+        return badRequest("Watch mode requires a remote URL");
+      }
+      if (wantsWatch && !parseGitHubRemote(remote)) {
+        return badRequest(
+          "Watch mode supports github.com remotes only; omit watch to clone instead",
+        );
+      }
       try {
-        if (pathIn || remote) {
+        // Watch mode deliberately does not call ensureCodeRepo: nothing is
+        // cloned, nothing is written to ~/.kanbanly/code-clones.
+        if (!wantsWatch && (pathIn || remote)) {
           ensured = ensureCodeRepo({
             path: pathIn,
             remote,
@@ -1650,8 +1798,11 @@ export function createHandler(options: AppOptions = {}) {
       }
 
       const result = await connected.storage.setCodeBinding(boardId, {
-        path: pathIn,
+        path: wantsWatch ? undefined : pathIn,
         remote: remote || ensured?.remote || undefined,
+        watch: wantsWatch ? true : undefined,
+        // Persisted so every later watch read can find its token.
+        credentialId: body?.credentialId?.trim() || undefined,
       });
       if (!result.ok) {
         return json(
@@ -1760,9 +1911,32 @@ export function createHandler(options: AppOptions = {}) {
         priority?: string | null;
         column?: string;
         order?: string;
+        checklist?: Array<{ text: string; done: boolean }>;
       }>(req);
       if (!body || Object.keys(body).length === 0) {
         return badRequest("Body must include at least one field to update");
+      }
+      if (body.checklist !== undefined) {
+        if (
+          !Array.isArray(body.checklist) ||
+          body.checklist.some(
+            (i) =>
+              !i ||
+              typeof i.text !== "string" ||
+              i.text.trim().length === 0 ||
+              typeof i.done !== "boolean",
+          )
+        ) {
+          return badRequest(
+            "checklist must be an array of { text: non-empty string, done: boolean }",
+          );
+        }
+        // Normalise here so a newline can never smuggle extra markdown lines
+        // into the card file.
+        body.checklist = body.checklist.map((i) => ({
+          text: i.text.replace(/\s+/g, " ").trim(),
+          done: i.done,
+        }));
       }
 
       await refreshRepo(connected, { indexStore });
@@ -1793,6 +1967,7 @@ export function createHandler(options: AppOptions = {}) {
           due: updated.value.card.frontmatter.due,
           priority: updated.value.card.frontmatter.priority,
           status: updated.value.card.status,
+          checklist: updated.value.card.checklist ?? [],
           log: updated.value.card.log,
           updated: updated.value.card.frontmatter.updated,
         },

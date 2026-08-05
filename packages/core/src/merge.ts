@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import type { Card, CardFrontmatter } from "./card.ts";
+import type { Card, CardFrontmatter, ChecklistItem } from "./card.ts";
 import { parseCard, serializeCard } from "./card.ts";
 
 /**
@@ -67,13 +67,96 @@ export function mergeLog(ours: string[], theirs: string[], base: string[] = []):
   });
 }
 
+/**
+ * Merge `## Checklist`.
+ *
+ * A checklist is not append-only like the Log, so union-dedupe is wrong: ticking
+ * `- [ ] x` to `- [x] x` is a modification, and a naive union would keep both
+ * states as two separate items. So identity is (text, nth occurrence of that
+ * text) and the checkbox is mutable state:
+ *
+ * - union by that key, preserving ours-then-theirs order for stable diffs
+ * - repeated wording ("review" twice) stays two items rather than collapsing
+ * - an item deleted on one side and untouched on the other stays deleted
+ * - if both sides kept an item but disagree on state, **checked wins** —
+ *   over-reporting done is recoverable by unticking; silently losing someone's
+ *   completed work is not, and the Log records who ticked it.
+ */
+export function mergeChecklist(
+  ours: ChecklistItem[],
+  theirs: ChecklistItem[],
+  base: ChecklistItem[] = [],
+): ChecklistItem[] {
+  // Identity is (text, nth occurrence of that text). Keying on text alone
+  // silently collapsed duplicates — and "review"/"test"/"deploy" repeating
+  // under different sub-headings is ordinary in a checklist.
+  const key = (i: ChecklistItem, n: number) => `${n}\u0000${i.text}`;
+  const index = (list: ChecklistItem[]) => {
+    const seen = new Map<string, number>();
+    const out = new Map<string, ChecklistItem>();
+    const order: string[] = [];
+    for (const item of list) {
+      const n = seen.get(item.text) ?? 0;
+      seen.set(item.text, n + 1);
+      const k = key(item, n);
+      out.set(k, item);
+      order.push(k);
+    }
+    return { map: out, order };
+  };
+
+  const o = index(ours);
+  const t = index(theirs);
+  const b = index(base);
+
+  // Present in base but dropped on one side → treat as a deliberate deletion.
+  const deleted = new Set<string>();
+  for (const k of b.order) {
+    if (!o.map.has(k) || !t.map.has(k)) deleted.add(k);
+  }
+
+  const out: ChecklistItem[] = [];
+  const emitted = new Set<string>();
+  for (const k of [...o.order, ...t.order]) {
+    if (emitted.has(k) || deleted.has(k)) continue;
+    emitted.add(k);
+    const mine = o.map.get(k);
+    const yours = t.map.get(k);
+    const src = mine ?? yours!;
+    out.push({
+      text: src.text,
+      // Checked wins: over-reporting done is recoverable by unticking, losing
+      // someone's completed work is not. The Log records who ticked it.
+      done: (mine?.done ?? false) || (yours?.done ?? false),
+      ...(src.indent ? { indent: src.indent } : {}),
+    });
+  }
+  return out;
+}
+
 export function mergeCards(base: Card, ours: Card, theirs: Card): Card {
   const frontmatter = pickFrontmatter(base.frontmatter, ours.frontmatter, theirs.frontmatter);
   const ourNewer = updatedMs(ours.frontmatter.updated) >= updatedMs(theirs.frontmatter.updated);
   const status = ourNewer ? ours.status : theirs.status;
+  const checklist = mergeChecklist(
+    ours.checklist ?? [],
+    theirs.checklist ?? [],
+    base.checklist ?? [],
+  );
   const log = mergeLog(ours.log, theirs.log, base.log);
 
-  return { frontmatter, status, log };
+  // When neither side touched the checklist, keep the verbatim section so a
+  // merge of unrelated fields cannot flatten it.
+  const rawUnchanged =
+    ours.checklistRaw !== undefined && ours.checklistRaw === theirs.checklistRaw;
+
+  return {
+    frontmatter,
+    status,
+    checklist,
+    ...(rawUnchanged ? { checklistRaw: ours.checklistRaw } : {}),
+    log,
+  };
 }
 
 /**

@@ -89,6 +89,7 @@ export function agentCreateCard(input: AgentCreateInput): {
       labels: input.labels ?? [],
     },
     status: input.status ?? "_Not started._",
+    checklist: [],
     log: [`${today()} ${actor}: created`],
   };
   const markdown = serializeCard(card);

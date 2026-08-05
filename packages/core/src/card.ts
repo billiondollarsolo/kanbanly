@@ -18,9 +18,24 @@ export const CardFrontmatterSchema = z.object({
 
 export type CardFrontmatter = z.infer<typeof CardFrontmatterSchema>;
 
+/** One `- [ ]` / `- [x]` line under `## Checklist`. */
+export type ChecklistItem = {
+  text: string;
+  done: boolean;
+  /** Leading indent in spaces, preserved so nested sub-items survive a write. */
+  indent?: number;
+};
+
 export type Card = {
   frontmatter: CardFrontmatter;
   status: string;
+  checklist: ChecklistItem[];
+  /**
+   * Verbatim `## Checklist` body as it was read. Serialization re-emits this
+   * untouched when the parsed items still match it, so a card whose checklist
+   * nobody edited can never lose prose, nesting or blank lines to a rewrite.
+   */
+  checklistRaw?: string;
   log: string[];
 };
 
@@ -34,11 +49,74 @@ export type CardResult = { ok: true; card: Card } | { ok: false; error: CardPars
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 
-function extractSections(body: string): { status: string; log: string[] } {
-  const statusMatch = body.match(/##\s*Status\s*\n([\s\S]*?)(?=\n##\s*Log\b|$)/i);
+/**
+ * Parse `## Checklist` body lines. Accepts GFM task syntax and is lenient about
+ * a plain `- item` (agents write those), treating it as unchecked.
+ */
+function parseChecklist(block: string): ChecklistItem[] {
+  const items: ChecklistItem[] = [];
+  for (const raw of block.split("\n")) {
+    if (raw.trim().length === 0) continue;
+    const indent = raw.length - raw.trimStart().length;
+    const line = raw.trim();
+    const task = line.match(/^[-*]\s*\[([ xX])\]\s*(.*)$/);
+    if (task) {
+      const text = task[2]!.trim();
+      if (text.length > 0) {
+        items.push({
+          text,
+          done: task[1]!.toLowerCase() === "x",
+          ...(indent > 0 ? { indent } : {}),
+        });
+      }
+      continue;
+    }
+    const plain = line.match(/^[-*]\s+(.*)$/);
+    if (plain) {
+      const text = plain[1]!.trim();
+      if (text.length > 0) {
+        items.push({ text, done: false, ...(indent > 0 ? { indent } : {}) });
+      }
+    }
+  }
+  return items;
+}
+
+/** True when `items` is exactly what `raw` parses to — i.e. nothing was edited. */
+function checklistMatchesRaw(items: ChecklistItem[], raw: string | undefined): boolean {
+  if (raw === undefined) return false;
+  const parsed = parseChecklist(raw);
+  if (parsed.length !== items.length) return false;
+  return parsed.every((p, i) => {
+    const q = items[i]!;
+    return p.text === q.text && p.done === q.done && (p.indent ?? 0) === (q.indent ?? 0);
+  });
+}
+
+/**
+ * Split the card body into known sections.
+ *
+ * Status deliberately stops only at the *known* headings that follow it, so an
+ * unrecognised `## Heading` inside Status is preserved rather than dropped on
+ * the next write.
+ */
+function extractSections(body: string): {
+  status: string;
+  checklist: ChecklistItem[];
+  checklistRaw?: string;
+  log: string[];
+} {
+  const statusMatch = body.match(
+    /##\s*Status\s*\n([\s\S]*?)(?=\n##\s*(?:Checklist|Log)\b|$)/i,
+  );
+  const checklistMatch = body.match(
+    /##\s*Checklist\s*\n([\s\S]*?)(?=\n##\s*Log\b|$)/i,
+  );
   const logMatch = body.match(/##\s*Log\s*\n([\s\S]*)$/i);
 
   const status = statusMatch ? statusMatch[1]!.trim() : "";
+  const checklistRaw = checklistMatch ? checklistMatch[1]!.replace(/\n+$/, "") : undefined;
+  const checklist = checklistRaw !== undefined ? parseChecklist(checklistRaw) : [];
   const logBlock = logMatch ? logMatch[1]!.trim() : "";
   const log =
     logBlock.length === 0
@@ -48,7 +126,7 @@ function extractSections(body: string): { status: string; log: string[] } {
           .map((line) => line.replace(/^-\s*/, "").trim())
           .filter((line) => line.length > 0);
 
-  return { status, log };
+  return { status, checklist, checklistRaw, log };
 }
 
 /**
@@ -117,12 +195,14 @@ export function parseCard(text: string): CardResult {
       };
     }
 
-    const { status, log } = extractSections(m[2] ?? "");
+    const { status, checklist, checklistRaw, log } = extractSections(m[2] ?? "");
     return {
       ok: true,
       card: {
         frontmatter: validated.data,
         status,
+        checklist,
+        checklistRaw,
         log,
       },
     };
@@ -164,7 +244,21 @@ export function serializeCard(card: Card): string {
   const logLines =
     card.log.length > 0 ? card.log.map((line) => `- ${line}`).join("\n") : "";
 
-  return `---\n${yaml}\n---\n\n## Status\n${statusBody}\n\n## Log\n${logLines}\n`;
+  // Emit ## Checklist only when it has items, so existing cards do not all gain
+  // an empty section (and a diff) on their next write.
+  const checklist = card.checklist ?? [];
+  let checklistBlock = "";
+  if (checklistMatchesRaw(checklist, card.checklistRaw)) {
+    // Untouched: re-emit byte-for-byte. Prose, blank lines and any other
+    // content under the heading survive a write of an unrelated field.
+    checklistBlock = `\n## Checklist\n${card.checklistRaw}\n`;
+  } else if (checklist.length > 0) {
+    checklistBlock = `\n## Checklist\n${checklist
+      .map((i) => `${" ".repeat(i.indent ?? 0)}- [${i.done ? "x" : " "}] ${i.text}`)
+      .join("\n")}\n`;
+  }
+
+  return `---\n${yaml}\n---\n\n## Status\n${statusBody}\n${checklistBlock}\n## Log\n${logLines}\n`;
 }
 
 /** Count occurrences of a top-level YAML key in serialized frontmatter. */
