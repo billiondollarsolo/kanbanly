@@ -9,6 +9,11 @@
     "kanbanly": "./bin/kanbanly"
   },
   "scripts": {
+    "start": "docker compose -f deploy/compose.yaml up --build",
+    "start:detach": "docker compose -f deploy/compose.yaml up --build -d",
+    "stop": "docker compose -f deploy/compose.yaml down",
+    "docker:build": "docker build -t kanbanly:latest .",
+    "docker:up": "docker compose -f deploy/compose.yaml up --build",
     "test": "bun test packages/core packages/server",
     "test:core": "bun test packages/core",
     "test:server": "bun test packages/server",

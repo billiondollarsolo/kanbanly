@@ -1,122 +1,217 @@
 # kanbanly
 
-Self-hosted, multi-project kanban whose data lives in **git** as markdown cards.
-Agents and the UI are independent clients of the same remote.
+**Self-hosted kanban.** Boards are ordinary **git repositories** of markdown cards. Humans use the web UI; coding agents read and write the same files. Git is the only contract.
 
-**Core principle: git is the only contract.**
+```text
+UI  ──┐
+      ├──▶  boards git remote  ◀──  agents (Claude, Cursor, …)
+API ──┘
+```
 
-## Layout
+| | |
+|---|---|
+| **License** | [AGPL-3.0-or-later](LICENSE) |
+| **Default run** | **Docker** (UI + API + demo boards) |
+| **Open** | http://127.0.0.1:3847/ |
+| **SaaS** | Private product: [kanbanly-saas](https://github.com/billiondollarsolo/kanbanly-saas) |
 
-| Path | What |
+---
+
+## Quick start (Docker — default)
+
+You only need [Docker](https://docs.docker.com/get-docker/) with Compose v2.
+
+```bash
+git clone https://github.com/billiondollarsolo/kanbanly.git
+cd kanbanly
+
+docker compose -f deploy/compose.yaml up --build
+```
+
+Then open **http://127.0.0.1:3847/**
+
+That one command:
+
+1. Builds the React board UI into the image
+2. Starts the HTTP API, SSE live updates, and git push queue
+3. Seeds a **demo boards git repo** (layout A: `backend` + `web`) into a Docker volume on first start
+4. Publishes the port on **loopback only** (`127.0.0.1:3847`) — OSS has **no login**
+
+| Command | What it does |
+|---------|----------------|
+| `docker compose -f deploy/compose.yaml up --build` | Build + run in the foreground |
+| `docker compose -f deploy/compose.yaml up --build -d` | Same, detached |
+| `docker compose -f deploy/compose.yaml down` | Stop |
+| `docker compose -f deploy/compose.yaml down -v` | Stop **and** wipe demo boards data |
+
+If you already have [Bun](https://bun.sh) after cloning, these are shortcuts for the same Compose file:
+
+```bash
+bun start          # docker compose … up --build
+bun run start:detach
+bun run stop
+```
+
+Full runbook (env vars, volumes, health): **[docs/OSS.md](docs/OSS.md)**.
+
+### Use your own boards directory
+
+Build once, then bind-mount any host path at `/boards`:
+
+```bash
+docker compose -f deploy/compose.yaml build
+
+docker run --rm -p 127.0.0.1:3847:3847 \
+  -v "$PWD/my-boards:/boards" \
+  -e KANBANLY_REPO=/boards \
+  kanbanly:latest
+```
+
+- Empty directory → entrypoint seeds the demo layout and `git init`
+- Non-empty without `.git` → `git init` + initial commit
+- Existing git boards repo (layout A or B) → used as-is
+
+### Health check
+
+```bash
+curl -sf http://127.0.0.1:3847/health
+```
+
+Expect `"ok":true`. The image also defines a Docker `HEALTHCHECK` on the same endpoint.
+
+---
+
+## What is a “boards repo”?
+
+A git repository using **layout A** (multiple boards as subdirectories) or **layout B** (one board at the repo root):
+
+```text
+boards/                    # git root (layout A)
+  AGENTS.md                # conventions for agents
+  backend/
+    board.yml              # columns, labels
+    cards/
+      c-a1b2-setup-auth.md
+  web/
+    board.yml
+    cards/
+```
+
+Each card is markdown: YAML frontmatter + `## Status` + `## Log` (see [Card format](#card-format)).
+
+Demo fixtures live in `fixtures/boards-layout-a` and are copied into the container volume on first boot.
+
+---
+
+## Everyday UI
+
+| Action | How |
+|--------|-----|
+| Move a card | Drag between / within columns |
+| Add a card | Bottom of each column, or header quick-add |
+| Edit | Click card → detail panel → Save |
+| Sync from remote | **Fetch remote** (when `origin` is configured) |
+| Conflicts | Banner → keep-mine / keep-theirs |
+| Theme | Light / Dark / System (header) |
+| Help | Press `?` |
+
+**Deep links:** `/b/<board>` · `/b/<board>/<cardId>` · `/r/<remote-slug>/b/<board>`
+
+**Keyboard:** arrows / hjkl focus · Shift+←/→ move · Enter open · `x` multi-select · Esc close · `?` help
+
+---
+
+## Security
+
+OSS has **no authentication**. Anyone who can reach the bind address can change every connected boards repo.
+
+- Default Compose publishes **only** `127.0.0.1:3847`
+- Binding off loopback (or publishing `0.0.0.0` on the host) prints a CLI warning — do that only behind your own reverse proxy / network controls
+
+---
+
+## Repository layout
+
+| Path | Role |
 |------|------|
-| `packages/core` | `@kanbanly/core` — card schema, order, merge, heal, Git/S3 storage, setup, AI tools (AGPL boundary) |
-| `packages/server` | `@kanbanly/server` — OSS HTTP API, SSE, push queue, multi-remote registry |
-| `apps/web` | React board UI (built into `packages/server/public`) |
-| `apps/start` | TanStack Start board (optional docs stack) |
-| `kanbanly-saas` | Closed SaaS (private repo: [billiondollarsolo/kanbanly-saas](https://github.com/billiondollarsolo/kanbanly-saas)) || `fixtures/` | Layout-A sample boards |
-| `docs/specs/` | Product specification |
-| `bin/kanbanly` | Cross-runtime CLI entry (Bun preferred, Node 22+ fallback) |
+| `packages/core` | Card format, merge/heal, Git + S3 adapters (AGPL boundary) |
+| `packages/server` | OSS HTTP server, SSE, push queue, multi-remote registry |
+| `apps/web` | Board UI (built into the Docker image) |
+| `apps/start` | Optional TanStack Start stack (local dev only) |
+| `fixtures/` | Demo boards layout |
+| `deploy/` | `compose.yaml` + container entrypoint |
+| `docs/OSS.md` | **How to run OSS** (Docker default) |
+| `bin/kanbanly` | CLI when not using Docker |
 
-## Quick start (OSS)
+---
+
+## Develop without Docker (optional)
+
+Prefer Docker for **running** the product. Use Bun only when changing TypeScript or the UI.
 
 ```bash
 bun install
-bun run build          # board UI → packages/server/public
-bun test               # core + server
-bun run typecheck
-bun run lint
-bun run test:conformance
+bun run build                 # UI → packages/server/public
+bun test                      # core + server
+bun run typecheck && bun run lint
 
-# Serve a boards repo (loopback by default)
-./bin/kanbanly serve --repo ./fixtures/boards-layout-a
+# Serve a git-initialized boards path
+./bin/kanbanly serve --repo /path/to/boards-git
 # → http://127.0.0.1:3847/
-
-# Or:
-bun run packages/server/src/cli.ts serve --repo ./fixtures/boards-layout-a
 ```
 
-### TanStack Start
+Scaffold a boards path:
 
 ```bash
-KANBANLY_REPO=$PWD/fixtures/boards-layout-a bun run dev:start
-# → http://127.0.0.1:3000/
+./bin/kanbanly setup --code /tmp/code --boards /tmp/boards \
+  --remote git@github.com:you/boards.git --board backend
+cd /tmp/boards && git init && git add -A && git commit -m init
+./bin/kanbanly serve --repo /tmp/boards
 ```
 
-## CLI
+### CLI
 
 ```text
-kanbanly serve [--host 127.0.0.1] [--port 3847] [--repo <path>]
+kanbanly serve [--host] [--port] [--repo]
 kanbanly merge-driver <ancestor> <ours> <theirs>
 kanbanly setup --code <path> --boards <path> --remote <url> [--board backend]
 kanbanly skill-install [--path <dir>]
 ```
 
-Non-loopback `--host` prints a loud warning (no auth on OSS).
+Environment (also used in Docker): `KANBANLY_HOST`, `KANBANLY_PORT`, `KANBANLY_REPO`.
 
-## HTTP API (OSS)
+### Optional: TanStack Start
+
+```bash
+KANBANLY_REPO=$PWD/fixtures/boards-layout-a bun run dev:start
+# http://127.0.0.1:3000/
+```
+
+---
+
+## HTTP API (summary)
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/health` | Liveness + sync + credentials status |
-| GET/POST | `/api/connect` | Connect wizard (local path or remote URL) |
-| GET | `/api/remotes` | Multi-remote sidebar |
-| POST | `/api/remotes/active` | Switch active remote `{ slug }` |
-| GET | `/api/boards` | List boards |
-| GET | `/api/boards/:id` | Board + cards |
+| GET | `/health` | Liveness, sync, credentials status |
+| GET/POST | `/api/connect` | Connect local path or clone URL |
+| GET | `/api/remotes` | Multi-remote list |
+| GET | `/api/boards` · `/api/boards/:id` | List / load board |
 | POST | `/api/boards/:id/cards` | Create card |
-| POST | `/api/boards/:id/cards/:cid/move` | Move card |
-| PATCH | `/api/boards/:id/cards/:cid` | Update fields |
-| GET | `/api/boards/:id/cards/:cid/history` | `git log --follow` |
+| POST | `.../cards/:cid/move` | Move card |
+| PATCH | `.../cards/:cid` | Update card |
+| GET | `.../cards/:cid/history` | `git log --follow` |
 | POST | `/api/boards/:id/archive` | Archive cards |
 | GET | `/api/events` | SSE board updates |
 | GET | `/api/sync` | Push queue status |
-| POST | `/api/sync/retry` | Flush push queue |
-| POST | `/api/sync/pull` | Fetch + ff-only + heal markers |
-| POST | `/api/sync/clear-freeze` | Unfreeze after conflicts |
-| GET/POST | `/api/conflicts` | List / resolve keep-mine|theirs|heal |
-| GET/POST/DELETE | `/api/credentials` | HTTPS PAT store (encrypted) |
-| GET | `/api/pr-status?pr=` | PR overlay |
+| POST | `/api/sync/retry` · `/api/sync/pull` | Retry push / fetch remote |
+| GET | `/api/conflicts` | Conflict list |
+| POST | `/api/conflicts/resolve` | keep-mine / keep-theirs |
+| GET/POST/DELETE | `/api/credentials` | Encrypted HTTPS PAT |
 
-Deep links (US-15):
+Product intent and acceptance criteria: [docs/specs/](docs/specs/).
 
-- Path (preferred): `/b/<board>/<card?>` or `/r/<remote>/b/<board>/<card?>`
-- Hash (compat): `#/b/...` or `#/r/...`
-
-## Keyboard
-
-| Key | Action |
-|-----|--------|
-| Arrows / hjkl | Focus cards |
-| Shift+←/→ | Move card columns |
-| Enter / Space | Open detail |
-| x | Multi-select |
-| Esc | Close / clear |
-| ? | Shortcuts help |
-
-## Docker
-
-```bash
-docker build -t kanbanly .
-docker run --rm -p 127.0.0.1:3847:3847 \
-  -v "$PWD/fixtures/boards-layout-a:/boards" \
-  kanbanly serve --host 0.0.0.0 --repo /boards
-```
-
-Healthcheck hits `/health`.
-
-## SaaS
-
-```bash
-cd kanbanly-saas && bun install && bun test
-bun run start -- --port 3850 --s3-dir ./.kanbanly-saas-s3
-# → http://127.0.0.1:3850/chat
-```
-
-- FileS3 / InMemory / AWS S3 (`AwsS3Client.fromEnv`)
-- Device-code auth scaffold
-- AI tools with **confirm-before-commit**
-- CORS enabled on JSON APIs
-- `GET /api/tenants/:tid/boards` and `.../boards/:bid`
+---
 
 ## Card format
 
@@ -127,15 +222,22 @@ title: Refactor auth middleware
 column: doing
 order: "a0"
 updated: 2026-08-04T12:53:00Z
+labels: [backend]
 ---
 
 ## Status
-What is true right now.
+What is true right now (overwrite on each change).
 
 ## Log
 - 2026-08-04 claude: created
 ```
 
+Agents should follow `AGENTS.md` in the boards repo (or run `kanbanly skill-install`).
+
+---
+
 ## License
 
-AGPL-3.0-or-later for the public monorepo. Closed SaaS imports `@kanbanly/core` under a private grant.
+AGPL-3.0-or-later for this monorepo. See [LICENSE](LICENSE).
+
+Private SaaS (S3, multi-tenant AI): [billiondollarsolo/kanbanly-saas](https://github.com/billiondollarsolo/kanbanly-saas).

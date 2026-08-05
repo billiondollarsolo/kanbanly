@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+.git
+**/.git
+kanbanly-saas
+apps/start
+e2e
+docs/specs/*-progress.txt
+*.log
+.DS_Store
+**/.kanbanly
+**/.kanbanly-saas-s3
+coverage

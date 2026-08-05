@@ -16,13 +16,17 @@ import {
 import { connectLocalRepo } from "./connect.ts";
 import { startServer } from "./app.ts";
 
-export const DEFAULT_HOST = "127.0.0.1";
-export const DEFAULT_PORT = 3847;
+export const DEFAULT_HOST = process.env.KANBANLY_HOST?.trim() || "127.0.0.1";
+export const DEFAULT_PORT = Number(process.env.KANBANLY_PORT) || 3847;
 
 export const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
 function printUsage(): void {
   console.log(`kanbanly — git-backed kanban
+
+Default OSS posture is Docker:
+  docker compose -f deploy/compose.yaml up --build
+  → http://127.0.0.1:3847/
 
 Usage:
   kanbanly serve [--host 127.0.0.1] [--port 3847] [--repo <path>]
@@ -31,15 +35,20 @@ Usage:
   kanbanly skill-install [--path <dir>]
 
 Options:
-  --host   Bind address (default: 127.0.0.1). Non-loopback prints a loud warning.
-  --port   Port (default: 3847)
-  --repo   Path to a local boards git repository (layout A or B)
+  --host   Bind address (default: $KANBANLY_HOST or 127.0.0.1). Non-loopback warns.
+  --port   Port (default: $KANBANLY_PORT or 3847)
+  --repo   Path to a boards git repository (default: $KANBANLY_REPO if set)
   --code   Code repo root for setup (writes .kanbanly.yml)
   --boards Boards repo path for setup
   --remote Boards remote URL for setup
   --board  Layout A board id when scaffolding (default: backend)
   --path   Target directory for skill-install
   -h, --help  Show this help
+
+Environment:
+  KANBANLY_HOST   Default bind host
+  KANBANLY_PORT   Default port
+  KANBANLY_REPO   Default --repo path (used by Docker entrypoint as /boards)
 `);
 }
 
@@ -76,7 +85,7 @@ export function parseArgs(argv: string[]): {
 
   let host = DEFAULT_HOST;
   let port = DEFAULT_PORT;
-  let repo: string | undefined;
+  let repo: string | undefined = process.env.KANBANLY_REPO?.trim() || undefined;
   let code: string | undefined;
   let boards: string | undefined;
   let remote: string | undefined;

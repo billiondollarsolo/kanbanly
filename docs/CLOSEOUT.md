@@ -28,9 +28,9 @@ Legend: `[x]` done in code · `[ ]` still needs human/CI/env · `[~]` partial
 | B4 | `bun run build` | [x] |
 | B5 | `bun run test:e2e` | [~] commit path required; Playwright optional if browsers missing |
 | B6 | `bun run test:conformance` | [x] |
-| B7 | Dockerfile + HEALTHCHECK | [x] |
+| B7 | Docker is default OSS run posture | [x] `docker compose -f deploy/compose.yaml up --build` / `bun start` |
 | B8 | WCAG AA automated | [x] palette contrast tests |
-| B9 | Docker image build in CI | [ ] needs CI runner with Docker |
+| B9 | Docker image build in CI | [ ] optional; local compose is the documented default |
 
 ## C. Explicit non-goals (do not block close)
 
@@ -50,12 +50,14 @@ bun test packages/core packages/server kanbanly-saas apps/start
 bun run test:conformance && bun run test:e2e && bun run test:node
 # optional full browser e2e:
 # bunx playwright install chromium && bunx playwright test -c e2e/playwright.config.ts
-# docker build -t kanbanly .
+# Default OSS run (Docker):
+# docker compose -f deploy/compose.yaml up --build
+# curl -sf http://127.0.0.1:3847/health
 ```
 
 ## E. Human QA (cannot fully automate)
 
 1. VoiceOver/NVDA: tab board, hear card announcements, open detail, escape.
 2. Manual Playwright drag in headed mode once.
-3. `docker build && docker run` smoke against a boards volume.
+3. Docker default smoke: `docker compose -f deploy/compose.yaml up --build` → UI at http://127.0.0.1:3847/ + `/health` + `/api/boards`.
 4. Connect wizard against a real GitHub HTTPS remote with PAT.
