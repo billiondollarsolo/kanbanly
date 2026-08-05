@@ -558,6 +558,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     host: opts.host,
     port: opts.port,
     connected,
+    // Real deployment: restore remotes connected in a previous run, which
+    // otherwise vanish from the UI on every restart.
+    rehydrateConnections: true,
   });
 
   console.log(`kanbanly serving on http://${server.hostname}:${server.port}`);

@@ -31,6 +31,7 @@ import {
   WorkspaceConfig,
   type ConflictResolveChoice,
   type GitCredential,
+  GitStorage,
 } from "@kanbanly/core";
 import {
   connectLocalRepo,
@@ -38,6 +39,7 @@ import {
   globalIndexStore,
   refreshRepo,
   type ConnectedRepo,
+  ensureMergeDriver,
 } from "./connect.ts";
 import type { BoardIndexStore, IndexedBoard, IndexedCard } from "./index-store.ts";
 import { LiveHub } from "./live.ts";
@@ -58,6 +60,13 @@ export type AppOptions = {
   pushQueue?: PushQueue;
   /** HTTPS credential store for push re-enter. */
   credentials?: CredentialStore;
+  /**
+   * Re-attach connections saved in workspace.json at boot. Off by default so a
+   * handler built in a test never picks up the developer's real global
+   * connections; startServer turns it on for the actual deployment.
+   */
+  rehydrateConnections?: boolean;
+
   /** Push debounce when auto-creating queue after connect wizard. */
   pushDebounceMs?: number;
   /** When false, never auto-create a push queue after connect. */
@@ -442,7 +451,86 @@ export function createHandler(options: AppOptions = {}) {
     }
   }
 
+  /**
+   * Re-attach connections saved in workspace.json.
+   *
+   * Everything needed already persists — the connection entry, its
+   * defaultCredentialId, and the clone on disk — but nothing read it back, so a
+   * restart left the server knowing only the repo it was launched with and every
+   * previously connected remote silently disappeared from the UI.
+   *
+   * Best-effort per connection: a missing or unreadable clone must not stop the
+   * server from starting, or one stale entry would take the whole app down.
+   */
+  async function rehydrateSavedConnections(): Promise<{
+    restored: string[];
+    skipped: string[];
+  }> {
+    const restored: string[] = [];
+    const skipped: string[] = [];
+    let saved: ReturnType<typeof workspace.get>;
+    try {
+      saved = workspace.get();
+    } catch {
+      return { restored, skipped };
+    }
+    for (const conn of saved.connections ?? []) {
+      const localPath = conn.localPath?.trim();
+      if (!conn.id || !localPath) continue;
+      // Already attached (e.g. it is the repo we booted with).
+      if (registry.list().some((e) => e.slug === conn.id)) continue;
+      if (!existsSync(join(localPath, ".git"))) {
+        skipped.push(`${conn.id} (no clone at ${localPath})`);
+        continue;
+      }
+      try {
+        const storage = new GitStorage({
+          repoPath: localPath,
+          remoteUrl: conn.remoteUrl ?? undefined,
+        });
+        const cred = conn.defaultCredentialId
+          ? credentialBook.get(conn.defaultCredentialId)
+          : null;
+        if (cred) storage.setCredential(cred);
+        ensureMergeDriver(localPath);
+        const { index } = await indexStore.ensure(localPath, storage);
+        registry.add(
+          {
+            path: localPath,
+            remoteKey: localPath,
+            storage,
+            index,
+            remoteUrl: conn.remoteUrl ?? undefined,
+          },
+          conn.id,
+        );
+        restored.push(conn.id);
+      } catch (e) {
+        skipped.push(`${conn.id} (${e instanceof Error ? e.message : String(e)})`);
+      }
+    }
+    return { restored, skipped };
+  }
+
+  // Started at boot, awaited once by the handler so no request can observe a
+  // half-restored registry. Never rejects: startup must not hinge on it.
+  const rehydration: Promise<void> = (
+    options.rehydrateConnections ? rehydrateSavedConnections() : Promise.resolve({ restored: [], skipped: [] })
+  )
+    .then((r) => {
+      for (const skipped of r.skipped) {
+        console.warn(`[kanbanly] could not restore connection ${skipped}`);
+      }
+      try {
+        syncWorkspaceFromRegistry();
+      } catch {
+        /* ignore */
+      }
+    })
+    .catch(() => undefined);
+
   return async function handler(req: Request): Promise<Response> {
+    await rehydration;
     const url = new URL(req.url);
     const path = url.pathname;
     const method = req.method.toUpperCase();
@@ -2123,6 +2211,9 @@ export function startServer(options: ServeOptions = {}): StartedServer {
     pushQueue,
     pushDebounceMs: options.pushDebounceMs,
     enablePushQueue: options.enablePushQueue,
+    // Opt-in: the CLI `serve` command turns this on. Left off by default so a
+    // server started inside a test never inherits real global connections.
+    rehydrateConnections: options.rehydrateConnections ?? false,
   });
 
   const server = Bun.serve({
