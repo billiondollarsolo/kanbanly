@@ -47,6 +47,7 @@ export {
   PushQueue,
   defaultQueuePath,
   labelFor,
+  syncTooltip,
   type SyncState,
   type SyncStatus,
   type PushQueueOptions,

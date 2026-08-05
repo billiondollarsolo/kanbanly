@@ -32,8 +32,9 @@ describe("WCAG contrast (US-32 / NFR-8)", () => {
   });
 
   test("palette exports match CSS first-class colors", () => {
-    expect(THEME_PALETTES.dark.text).toBe("#e8eaed");
-    expect(THEME_PALETTES.light.bg).toBe("#f4f5f7");
+    expect(THEME_PALETTES.dark.text).toBe("#e5e8ea");
+    expect(THEME_PALETTES.light.bg).toBe("#f3f3f1");
+    expect(THEME_PALETTES.light.card).toBe("#ffffff");
     // muted on card still AA for both themes
     expect(
       meetsWcagAa(THEME_PALETTES.dark.muted, THEME_PALETTES.dark.card),

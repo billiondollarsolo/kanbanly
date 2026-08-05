@@ -6,8 +6,11 @@ import {
 } from "../src/auto-scroll.ts";
 import {
   parseBoardRoute,
+  parseAppRoute,
   formatBoardRoute,
   formatBoardPath,
+  formatSettingsPath,
+  formatAppPath,
   writeWindowBoardRoute,
   isSpaBoardPath,
   readWindowBoardRoute,
@@ -89,7 +92,47 @@ describe("board route path + hash (US-15)", () => {
     expect(isSpaBoardPath("/")).toBe(true);
     expect(isSpaBoardPath("/b/backend")).toBe(true);
     expect(isSpaBoardPath("/r/x/b/backend/c-1")).toBe(true);
+    expect(isSpaBoardPath("/settings")).toBe(true);
+    expect(isSpaBoardPath("/settings/activity")).toBe(true);
+    expect(isSpaBoardPath("/settings/boards/b-abc123")).toBe(true);
+    expect(isSpaBoardPath("/settings/r/local/boards/b-abc")).toBe(true);
     expect(isSpaBoardPath("/api/boards")).toBe(false);
+  });
+
+  test("parseAppRoute settings + board", () => {
+    expect(parseAppRoute("/settings/credentials")).toEqual({
+      kind: "settings",
+      section: "credentials",
+      remoteSlug: null,
+      boardId: null,
+    });
+    expect(parseAppRoute("/settings/r/local/boards/b-x7k2")).toEqual({
+      kind: "settings",
+      section: "boards",
+      remoteSlug: "local",
+      boardId: "b-x7k2",
+    });
+    expect(parseAppRoute("/b/b-x7k2/c-a1b2")).toEqual({
+      kind: "board",
+      remoteSlug: null,
+      boardId: "b-x7k2",
+      cardId: "c-a1b2",
+    });
+  });
+
+  test("formatSettingsPath + formatAppPath", () => {
+    expect(formatSettingsPath("activity")).toBe("/settings/activity");
+    expect(
+      formatSettingsPath("boards", { remoteSlug: "local", boardId: "b-1" }),
+    ).toBe("/settings/r/local/boards/b-1");
+    expect(
+      formatAppPath({
+        kind: "board",
+        remoteSlug: "local",
+        boardId: "b-1",
+        cardId: "c-2",
+      }),
+    ).toBe("/r/local/b/b-1/c-2");
   });
 
   test("readWindowBoardRoute prefers hash when set", () => {

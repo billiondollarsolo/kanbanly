@@ -1,4 +1,5 @@
-# kanbanly OSS — default run posture is Docker (UI + API + git boards).
+# kanbanly — Kanban for ADHD
+# Default OSS run posture is Docker (UI + API + git boards).
 #   docker compose -f deploy/compose.yaml up --build
 #   → http://127.0.0.1:3847/
 

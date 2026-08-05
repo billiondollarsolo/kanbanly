@@ -98,8 +98,9 @@ export class PushQueue {
     if (this.frozen) {
       status = "frozen";
     } else if (!this.hasOrigin()) {
+      // Local-only boards never push — surface as no_remote even with local commits,
+      // so the header does not imply a stuck push queue.
       if (this.status === "error" || this.status === "offline") status = this.status;
-      else if (this.pendingCount > 0) status = "pending";
       else status = "no_remote";
     } else if (this.flushing || this.status === "syncing") {
       status = "syncing";
@@ -335,9 +336,42 @@ export function labelFor(status: SyncStatus, n: number): string {
     case "error":
       return "⚠ push failed — retry";
     case "no_remote":
-      return "○ local only (no remote)";
+      // Local git commits exist but nothing to push to until a remote is configured.
+      return n > 0
+        ? `○ ${n} local · no remote`
+        : "○ local only (no remote)";
     default:
       return "✓ synced";
+  }
+}
+
+/** Longer tooltip for the header sync control (what it means / what click does). */
+export function syncTooltip(state: Pick<SyncState, "status" | "pendingCount" | "lastError" | "label">): string {
+  const n = state.pendingCount;
+  if (state.lastError) return state.lastError;
+  switch (state.status) {
+    case "synced":
+      return "All local commits are pushed to the remote.";
+    case "pending":
+      return n > 0
+        ? `${n} local git commit${n === 1 ? "" : "s"} waiting to push. Click to push now.`
+        : "Local commits waiting to push. Click to push now.";
+    case "syncing":
+      return "Pushing local commits to the remote…";
+    case "offline":
+      return n > 0
+        ? `Remote unreachable. ${n} commit${n === 1 ? "" : "s"} will push when online. Click to retry.`
+        : "Remote unreachable. Click to retry.";
+    case "frozen":
+      return "Sync paused due to a merge conflict. Resolve conflicts, then retry.";
+    case "error":
+      return "Last push failed. Click to retry.";
+    case "no_remote":
+      return n > 0
+        ? `${n} local git commit${n === 1 ? "" : "s"} saved on disk. No git remote is configured, so nothing is waiting to upload. Click Settings → Repositories to add one.`
+        : "Working locally with no git remote. Click to open repository settings.";
+    default:
+      return state.label;
   }
 }
 

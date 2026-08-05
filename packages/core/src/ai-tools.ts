@@ -75,6 +75,82 @@ export const cardHistoryTool: AiToolDefinition = {
   }),
 };
 
+export const getNotesTool: AiToolDefinition = {
+  name: "get_notes",
+  description:
+    "Read project NOTES.md for a board (intent, decisions, agent standing orders)",
+  kind: "read",
+  requiresConfirm: false,
+  parameters: z.object({
+    boardId: z.string(),
+  }),
+};
+
+export const listProjectCommitsTool: AiToolDefinition = {
+  name: "list_project_commits",
+  description:
+    "List recent commits from the board's bound **source code** repo (not boards-repo chore commits)",
+  kind: "read",
+  requiresConfirm: false,
+  parameters: z.object({
+    boardId: z.string(),
+    limit: z.number().int().positive().max(200).optional(),
+  }),
+};
+
+export const setCodeBindingTool: AiToolDefinition = {
+  name: "set_code_binding",
+  description:
+    "Bind a board to a source/code repo (local path and/or remote URL). Server may clone the remote into ~/.kanbanly/code-clones.",
+  kind: "write",
+  requiresConfirm: true,
+  parameters: z.object({
+    boardId: z.string(),
+    path: z.string().optional(),
+    remote: z.string().optional(),
+    clear: z.boolean().optional(),
+  }),
+};
+
+export const updateNotesTool: AiToolDefinition = {
+  name: "update_notes",
+  description: "Write project NOTES.md for a board (durable decisions/risks)",
+  kind: "write",
+  requiresConfirm: true,
+  parameters: z.object({
+    boardId: z.string(),
+    body: z.string(),
+  }),
+};
+
+export const sessionEndTool: AiToolDefinition = {
+  name: "session_end",
+  description:
+    "Unattended fleet: append session-end Log (+ optional Status/SHA). Required before long agent run finishes.",
+  kind: "write",
+  requiresConfirm: true,
+  parameters: z.object({
+    boardId: z.string(),
+    cardId: z.string(),
+    summary: z.string().min(1),
+    agent: z.string().optional(),
+    status: z.string().optional(),
+    sha: z.string().optional(),
+  }),
+};
+
+export const fleetHealthTool: AiToolDefinition = {
+  name: "fleet_health",
+  description:
+    "Unattended fleet: list high-priority board issues (stale Doing, P0, silent pulse, WIP over)",
+  kind: "read",
+  requiresConfirm: false,
+  parameters: z.object({
+    staleHours: z.number().optional(),
+    silentHours: z.number().optional(),
+  }),
+};
+
 export const createCardTool: AiToolDefinition = {
   name: "create_card",
   description: "Create a new card with a title in a column",
@@ -129,6 +205,12 @@ export const ALL_AI_TOOLS: AiToolDefinition[] = [
   boardSummaryTool,
   searchCardsTool,
   cardHistoryTool,
+  getNotesTool,
+  listProjectCommitsTool,
+  fleetHealthTool,
+  setCodeBindingTool,
+  updateNotesTool,
+  sessionEndTool,
   createCardTool,
   moveCardTool,
   updateStatusTool,

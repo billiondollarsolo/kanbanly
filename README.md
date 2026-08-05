@@ -1,6 +1,8 @@
 # kanbanly
 
-**Self-hosted kanban.** Boards are ordinary **git repositories** of markdown cards. Humans use the web UI; coding agents read and write the same files. Git is the only contract.
+**Kanban for ADHD.**
+
+Self-hosted kanban built for focus and agents. Boards are ordinary **git repositories** of markdown cards. Humans use the web UI; coding agents read and write the same files. Git is the only contract.
 
 ```text
 UI  ──┐
@@ -52,7 +54,9 @@ bun run start:detach
 bun run stop
 ```
 
-Full runbook (env vars, volumes, health): **[docs/OSS.md](docs/OSS.md)**.
+Full runbook (env vars, volumes, health): **[docs/OSS.md](docs/OSS.md)**.  
+How to test (offline → PAT remote → agent skill): **[docs/TESTING.md](docs/TESTING.md)**.  
+Agent skill (installable): **[skills/kanbanly/SKILL.md](skills/kanbanly/SKILL.md)** (`bun run skill:install`).
 
 ### Use your own boards directory
 
@@ -109,6 +113,9 @@ Demo fixtures live in `fixtures/boards-layout-a` and are copied into the contain
 |--------|-----|
 | Move a card | Drag between / within columns |
 | Add a card | Bottom of each column, or header quick-add |
+| Add a list | **+ Add a list** at the end of the board (writes `board.yml`) |
+| Rename / reorder / delete list | Column **···** menu (double-click title to rename) |
+| New board | Toolbar **+ Board** (layout A subdirectory) |
 | Edit | Click card → detail panel → Save |
 | Sync from remote | **Fetch remote** (when `origin` is configured) |
 | Conflicts | Banner → keep-mine / keep-theirs |
@@ -197,6 +204,11 @@ KANBANLY_REPO=$PWD/fixtures/boards-layout-a bun run dev:start
 | GET/POST | `/api/connect` | Connect local path or clone URL |
 | GET | `/api/remotes` | Multi-remote list |
 | GET | `/api/boards` · `/api/boards/:id` | List / load board |
+| POST | `/api/boards` | Create board (layout A dir + starter `board.yml`) |
+| POST | `/api/boards/:id/columns` | Add list |
+| PUT | `/api/boards/:id/columns` | Reorder lists `{ order: string[] }` |
+| PATCH | `/api/boards/:id/columns/:col` | Rename list `{ name }` |
+| DELETE | `/api/boards/:id/columns/:col` | Delete list (`moveTo` if cards) |
 | POST | `/api/boards/:id/cards` | Create card |
 | POST | `.../cards/:cid/move` | Move card |
 | PATCH | `.../cards/:cid` | Update card |

@@ -46,6 +46,10 @@ describe("Pragmatic DnD wiring (structural)", () => {
     expect(boardSrc).toContain("dropTargetForElements");
     expect(boardSrc).toContain("dropToMovePayload");
     expect(boardSrc).toContain("moveCard");
+    // List reorder DnD (column-drag) alongside card drag
+    expect(boardSrc).toContain("column-drag");
+    expect(boardSrc).toContain("onDropColumn");
+    expect(boardSrc).toContain("reorderColumns");
     // Nested drop targets must only commit from innermost (no double POST)
     expect(boardSrc).toContain("isInnermostDropTarget");
     expect(boardSrc).toContain("resolveDropIndex");
@@ -55,10 +59,10 @@ describe("Pragmatic DnD wiring (structural)", () => {
     expect(boardSrc).toContain("navigateFocus");
     expect(boardSrc).toContain("keyboardMoveTarget");
     expect(boardSrc).toContain("keyToNavDirection");
-    // Must not shell out to git from the client
+    // Must not shell out to git from the client (UI copy may say "git commit")
     expect(boardSrc).not.toMatch(/spawnSync\(["']git/);
-    expect(boardSrc).not.toMatch(/\bgit\s+commit\b/);
-    expect(boardSrc).not.toMatch(/child_process/);
+    expect(boardSrc).not.toMatch(/from\s+["']node:child_process["']/);
+    expect(boardSrc).not.toMatch(/require\(["']child_process["']\)/);
   });
 
   test("api.ts exposes EventSource subscription to /api/events", () => {

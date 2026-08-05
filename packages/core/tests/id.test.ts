@@ -1,38 +1,34 @@
 import { describe, expect, test } from "bun:test";
-import { cardFilename, generateCardId, slugifyTitle } from "../src/id.ts";
+import {
+  cardFilename,
+  DEFAULT_ID_HEX_LENGTH,
+  generateBoardId,
+  generateCardId,
+  slugifyTitle,
+} from "../src/id.ts";
 
 describe("generateCardId", () => {
-  test("returns c- + 4–6 base36 chars not in existingIds", () => {
+  test("returns c- + 24 hex chars (Trello-style) by default", () => {
     const id = generateCardId([]);
-    expect(id).toMatch(/^c-[0-9a-z]{4,6}$/);
+    expect(id).toMatch(new RegExp(`^c-[0-9a-f]{${DEFAULT_ID_HEX_LENGTH}}$`));
   });
 
-  test("retries on collision with seeded generator forcing 3 collisions", () => {
-    // Sequence: first three generate "aaaa", fourth generates "bbbb"
+  test("retries on collision with seeded generator", () => {
+    // Sequence: first three generate all "a", fourth generates all "b"
     let n = 0;
     const forced = () => {
-      // Math.floor(random * 36) — return value that maps to 'a' (10) or 'b' (11)
-      // char index 10 = 'a', 11 = 'b'
-      const phase = Math.floor(n / 4); // 4 chars per id
-      const charPos = n % 4;
+      const phase = Math.floor(n / 8); // 8 hex chars per attempt at length 8
       n++;
       if (phase < 3) {
-        // always 'a' → id c-aaaa
-        return 10 / 36 + 0.0001;
+        return 10 / 16 + 0.0001; // 'a'
       }
-      // then 'b' → c-bbbb
-      return 11 / 36 + 0.0001;
+      return 11 / 16 + 0.0001; // 'b'
     };
-    // Also need existing to include c-aaaa so first 3 collide
-    const existing = new Set<string>(["c-aaaa"]);
-    // Actually our generator will produce c-aaaa three times then c-bbbb
-    // Wait: each generateCardId call retries internally. So one call with
-    // existing {c-aaaa} and random that produces aaaa then bbbb works.
+    const existing = new Set<string>(["c-aaaaaaaa"]);
     n = 0;
-    const id = generateCardId(existing, { random: forced, length: 4 });
-    expect(id).toBe("c-bbbb");
-    // We used more than 4 random draws (collision retries)
-    expect(n).toBeGreaterThan(4);
+    const id = generateCardId(existing, { random: forced, length: 8 });
+    expect(id).toBe("c-bbbbbbbb");
+    expect(n).toBeGreaterThan(8);
   });
 
   test("avoids all existing ids", () => {
@@ -43,6 +39,27 @@ describe("generateCardId", () => {
       existing.add(id);
     }
     expect(existing.size).toBe(50);
+  });
+
+  test("rejects invalid length", () => {
+    expect(() => generateCardId([], { length: 4 })).toThrow(/8–32/);
+  });
+});
+
+describe("generateBoardId", () => {
+  test("returns b- + 24 hex chars by default", () => {
+    const id = generateBoardId([]);
+    expect(id).toMatch(new RegExp(`^b-[0-9a-f]{${DEFAULT_ID_HEX_LENGTH}}$`));
+  });
+
+  test("unique across many draws", () => {
+    const ids = new Set<string>();
+    for (let i = 0; i < 20; i++) {
+      const id = generateBoardId(ids);
+      expect(id).toMatch(/^b-[0-9a-f]{24}$/);
+      ids.add(id);
+    }
+    expect(ids.size).toBe(20);
   });
 });
 

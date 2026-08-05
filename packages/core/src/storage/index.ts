@@ -40,3 +40,17 @@ export {
   type GitCredential,
   type CredentialStoreFile,
 } from "./credentials.ts";
+export {
+  CredentialBook,
+  credentialBookPath,
+  type CredentialBookEntry,
+  type CredentialBookPublic,
+} from "./credential-book.ts";
+export {
+  WorkspaceConfig,
+  workspaceConfigPath,
+  boardBindingKey,
+  type ConnectionConfig,
+  type BoardBinding,
+  type WorkspaceFile,
+} from "./workspace-config.ts";

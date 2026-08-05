@@ -1,5 +1,7 @@
 # Running kanbanly OSS
 
+**kanbanly — Kanban for ADHD.**
+
 **Default posture is Docker.** You get the board UI, HTTP API, SSE, and a git-backed boards volume without installing Bun.
 
 ## Default: Docker Compose

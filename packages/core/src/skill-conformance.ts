@@ -35,6 +35,12 @@ export const AGENTS_MD_REQUIRED_MARKERS = [
   "column",
   "order",
   "updated",
+  "source of truth",
+  "NOTES.md",
+  "Session protocol",
+  "short SHA",
+  "Ready",
+  "session-end",
 ] as const;
 
 /** Assert AGENTS.md content documents the contract (static conformance). */

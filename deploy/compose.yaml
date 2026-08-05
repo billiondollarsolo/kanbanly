@@ -1,9 +1,11 @@
+# kanbanly — Kanban for ADHD
 # Default OSS run posture — board UI + API with a persistent boards git volume.
 #
 #   docker compose -f deploy/compose.yaml up --build
-#   open http://127.0.0.1:3847/
+#   open http://127.0.0.1:22000/
 #
 # Host port is bound to loopback only (OSS has no auth).
+# Published as 22000 by default so it does not collide with other local services on 3847.
 
 name: kanbanly
 
@@ -14,14 +16,17 @@ services:
       dockerfile: Dockerfile
     image: kanbanly:latest
     ports:
-      - "127.0.0.1:3847:3847"
+      - "127.0.0.1:22000:3847"
     volumes:
       # Persistent boards git repo (seeded with demo layout on first start)
       - boards-data:/boards
+      # Host credential book + workspace (PAT, multi-remote) — optional path
+      - ${HOME}/.kanbanly:/root/.kanbanly
     environment:
       KANBANLY_HOST: "0.0.0.0"
       KANBANLY_PORT: "3847"
       KANBANLY_REPO: "/boards"
+      HOME: "/root"
     restart: unless-stopped
 
 volumes:

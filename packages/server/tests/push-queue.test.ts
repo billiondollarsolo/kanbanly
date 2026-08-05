@@ -2,65 +2,18 @@
  * Push queue: debounce, coalesce, persist, real git push to bare remote.
  */
 import { describe, expect, test, afterEach } from "bun:test";
-import {
-  mkdtempSync,
-  mkdirSync,
-  writeFileSync,
-  readFileSync,
-  existsSync,
-  rmSync,
-} from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { spawnSync } from "node:child_process";
-import { GitStorage, defaultBoardYaml, orderInitial } from "@kanbanly/core";
+import { readFileSync, existsSync } from "node:fs";
+import { GitStorage, orderInitial } from "@kanbanly/core";
 import { PushQueue, defaultQueuePath, labelFor } from "../src/push-queue.ts";
 import { connectLocalRepo } from "../src/connect.ts";
 import { BoardIndexStore } from "../src/index-store.ts";
 import { startServer } from "../src/app.ts";
-import { freePort, makeTempRepoFromFixture } from "./helpers.ts";
-
-function git(cwd: string, args: string[]) {
-  return spawnSync("git", args, { cwd, encoding: "utf8" });
-}
-
-function makeBareRemotePair(): {
-  root: string;
-  bare: string;
-  clone: string;
-  cleanup: () => void;
-} {
-  const root = mkdtempSync(join(tmpdir(), "kanbanly-pushq-"));
-  const bare = join(root, "remote.git");
-  const seed = join(root, "seed");
-  const clone = join(root, "clone");
-  mkdirSync(bare, { recursive: true });
-  git(bare, ["init", "--bare"]);
-  git(root, ["clone", bare, seed]);
-  git(seed, ["config", "user.name", "seed"]);
-  git(seed, ["config", "user.email", "s@s"]);
-  mkdirSync(join(seed, "backend", "cards"), { recursive: true });
-  writeFileSync(join(seed, "backend", "board.yml"), defaultBoardYaml());
-  git(seed, ["add", "."]);
-  git(seed, ["commit", "-m", "init"]);
-  git(seed, ["branch", "-M", "main"]);
-  git(seed, ["push", "-u", "origin", "main"]);
-  git(root, ["clone", bare, clone]);
-  git(clone, ["config", "user.name", "w"]);
-  git(clone, ["config", "user.email", "w@w"]);
-  return {
-    root,
-    bare,
-    clone,
-    cleanup: () => {
-      try {
-        rmSync(root, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-    },
-  };
-}
+import {
+  freePort,
+  git,
+  makeBareRemotePair,
+  makeTempRepoFromFixture,
+} from "./helpers.ts";
 
 describe("labelFor", () => {
   test("matches header copy for sync states", () => {
@@ -69,6 +22,7 @@ describe("labelFor", () => {
     expect(labelFor("syncing", 1)).toMatch(/1 change.*syncing/);
     expect(labelFor("error", 0)).toMatch(/push failed/);
     expect(labelFor("no_remote", 0)).toMatch(/local only/);
+    expect(labelFor("no_remote", 4)).toMatch(/4 local · no remote/);
   });
 });
 
@@ -78,7 +32,7 @@ describe("PushQueue (real git)", () => {
     while (cleanups.length) cleanups.pop()!();
   });
 
-  test("enqueue without origin stays pending / no_remote and persists queue.json", async () => {
+  test("enqueue without origin is no_remote (not pending push) and persists queue.json", async () => {
     const ctx = makeTempRepoFromFixture();
     cleanups.push(ctx.cleanup);
     const storage = new GitStorage({ repoPath: ctx.repoPath });
@@ -89,7 +43,9 @@ describe("PushQueue (real git)", () => {
     q.enqueue("abc");
     const st = q.getState();
     expect(st.pendingCount).toBe(1);
-    expect(st.status === "pending" || st.status === "no_remote").toBe(true);
+    // No origin → never claim "pending" push; label shows local commits + no remote.
+    expect(st.status).toBe("no_remote");
+    expect(st.label).toMatch(/1 local · no remote/);
     expect(existsSync(qPath)).toBe(true);
     const raw = JSON.parse(readFileSync(qPath, "utf8")) as { pendingCount: number };
     expect(raw.pendingCount).toBe(1);
@@ -98,6 +54,7 @@ describe("PushQueue (real git)", () => {
     const q2 = new PushQueue({ storage, queuePath: qPath, debounceMs: 50_000 });
     cleanups.push(() => q2.stop());
     expect(q2.getState().pendingCount).toBe(1);
+    expect(q2.getState().status).toBe("no_remote");
   });
 
   test("coalesced enqueue + flush pushes to bare remote", async () => {

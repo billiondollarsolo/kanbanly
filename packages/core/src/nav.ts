@@ -1,35 +1,74 @@
 /**
- * Board deep-link helpers.
+ * App deep-link helpers.
  *
- * Spec paths (US-15):
+ * Board / card (US-15):
+ *   /b/<boardId>
+ *   /b/<boardId>/<cardId>
  *   /r/<remote>/b/<boardId>
  *   /r/<remote>/b/<boardId>/<cardId>
  *
- * Also supported:
- *   /b/<boardId>[/<cardId>]
- *   #/r/... and #/b/... (hash fallback for static hosts)
+ * Settings:
+ *   /settings
+ *   /settings/<section>
+ *   /settings/boards/<boardId>
+ *   /settings/r/<remote>/boards/<boardId>
+ *
+ * Hash forms (#/…) still accepted for static hosts.
  */
 
+export type SettingsSection =
+  | "boards"
+  | "repositories"
+  | "credentials"
+  | "filters"
+  | "theme"
+  | "activity";
+
+export const SETTINGS_SECTIONS: SettingsSection[] = [
+  "boards",
+  "repositories",
+  "credentials",
+  "filters",
+  "theme",
+  "activity",
+];
+
+export function isSettingsSection(v: string): v is SettingsSection {
+  return (SETTINGS_SECTIONS as string[]).includes(v);
+}
+
+/** Board deep-link (legacy BoardRoute shape). */
 export type BoardRoute = {
   remoteSlug: string | null;
   boardId: string | null;
   cardId: string | null;
 };
 
-/**
- * Parse pathname and/or hash into remote/board/card route.
- * Prefers hash when present (SPA history may keep both during migration).
- */
-export function parseBoardRoute(hashOrPath: string): BoardRoute {
+/** Full app route including settings. */
+export type AppRoute =
+  | {
+      kind: "board";
+      remoteSlug: string | null;
+      boardId: string | null;
+      cardId: string | null;
+    }
+  | {
+      kind: "settings";
+      section: SettingsSection;
+      /** Expanded board in settings (boards section). */
+      remoteSlug: string | null;
+      boardId: string | null;
+    }
+  | { kind: "home" };
+
+function stripToPath(hashOrPath: string): string {
   let raw = (hashOrPath || "").trim();
-  // If full URL-ish with hash, prefer hash segment
   const hashIdx = raw.indexOf("#");
   if (hashIdx >= 0) {
     raw = raw.slice(hashIdx + 1);
   } else {
     raw = raw.replace(/^#/, "");
   }
-  // strip origin if someone passed full URL pathname only
   try {
     if (raw.startsWith("http://") || raw.startsWith("https://")) {
       raw = new URL(raw).pathname;
@@ -38,8 +77,89 @@ export function parseBoardRoute(hashOrPath: string): BoardRoute {
     /* ignore */
   }
   raw = raw.trim();
+  if (!raw.startsWith("/")) raw = `/${raw}`;
+  // drop query
+  raw = raw.split("?")[0] ?? raw;
+  return raw.replace(/\/+$/, "") || "/";
+}
+
+/**
+ * Parse pathname and/or hash into remote/board/card route.
+ * Prefers hash when present (SPA history may keep both during migration).
+ */
+export function parseBoardRoute(hashOrPath: string): BoardRoute {
+  const app = parseAppRoute(hashOrPath);
+  if (app.kind === "board") {
+    return {
+      remoteSlug: app.remoteSlug,
+      boardId: app.boardId,
+      cardId: app.cardId,
+    };
+  }
+  if (app.kind === "settings" && app.boardId) {
+    return {
+      remoteSlug: app.remoteSlug,
+      boardId: app.boardId,
+      cardId: null,
+    };
+  }
+  return { remoteSlug: null, boardId: null, cardId: null };
+}
+
+/** Parse full app route (boards + settings). */
+export function parseAppRoute(hashOrPath: string): AppRoute {
+  const raw = stripToPath(hashOrPath);
   if (!raw || raw === "/") {
-    return { remoteSlug: null, boardId: null, cardId: null };
+    return { kind: "home" };
+  }
+
+  // /settings[/section][/…]
+  const settings = raw.match(/^\/settings(?:\/([^/]+))?(?:\/(.*))?$/);
+  if (settings) {
+    const secRaw = settings[1];
+    const rest = settings[2] ?? "";
+
+    // /settings/r/<remote>/boards/<boardId>
+    const nested = rest
+      ? null
+      : null;
+    void nested;
+    if (secRaw === "r" || (secRaw && rest)) {
+      // /settings/r/<remote>/boards/<id>
+      const full = raw.match(
+        /^\/settings\/r\/([^/]+)\/boards\/([^/]+)\/?$/,
+      );
+      if (full) {
+        return {
+          kind: "settings",
+          section: "boards",
+          remoteSlug: decodeURIComponent(full[1]!),
+          boardId: decodeURIComponent(full[2]!),
+        };
+      }
+    }
+
+    // /settings/boards/<boardId>
+    if (secRaw === "boards" && rest) {
+      const boardOnly = rest.match(/^([^/]+)\/?$/);
+      if (boardOnly) {
+        return {
+          kind: "settings",
+          section: "boards",
+          remoteSlug: null,
+          boardId: decodeURIComponent(boardOnly[1]!),
+        };
+      }
+    }
+
+    const section: SettingsSection =
+      secRaw && isSettingsSection(secRaw) ? secRaw : "boards";
+    return {
+      kind: "settings",
+      section,
+      remoteSlug: null,
+      boardId: null,
+    };
   }
 
   // /r/<remote>/b/<board>[/<card>]
@@ -48,6 +168,7 @@ export function parseBoardRoute(hashOrPath: string): BoardRoute {
   );
   if (withRemote) {
     return {
+      kind: "board",
       remoteSlug: decodeURIComponent(withRemote[1]!),
       boardId: decodeURIComponent(withRemote[2]!),
       cardId: withRemote[3] ? decodeURIComponent(withRemote[3]) : null,
@@ -58,13 +179,14 @@ export function parseBoardRoute(hashOrPath: string): BoardRoute {
   const legacy = raw.match(/^\/b\/([^/]+)(?:\/([^/]+))?\/?$/);
   if (legacy) {
     return {
+      kind: "board",
       remoteSlug: null,
       boardId: decodeURIComponent(legacy[1]!),
       cardId: legacy[2] ? decodeURIComponent(legacy[2]) : null,
     };
   }
 
-  return { remoteSlug: null, boardId: null, cardId: null };
+  return { kind: "home" };
 }
 
 /**
@@ -83,6 +205,37 @@ export function formatBoardPath(
     return `/r/${encodeURIComponent(remoteSlug)}/b/${b}${card}`;
   }
   return `/b/${b}${card}`;
+}
+
+/**
+ * Build settings path.
+ */
+export function formatSettingsPath(
+  section: SettingsSection = "boards",
+  options?: { remoteSlug?: string | null; boardId?: string | null },
+): string {
+  if (options?.boardId) {
+    if (options.remoteSlug) {
+      return `/settings/r/${encodeURIComponent(options.remoteSlug)}/boards/${encodeURIComponent(options.boardId)}`;
+    }
+    return `/settings/boards/${encodeURIComponent(options.boardId)}`;
+  }
+  if (section === "boards") return "/settings/boards";
+  return `/settings/${section}`;
+}
+
+/**
+ * Format any app route to a path string.
+ */
+export function formatAppPath(route: AppRoute): string {
+  if (route.kind === "home") return "/";
+  if (route.kind === "settings") {
+    return formatSettingsPath(route.section, {
+      remoteSlug: route.remoteSlug,
+      boardId: route.boardId,
+    });
+  }
+  return formatBoardPath(route.boardId, route.cardId, route.remoteSlug);
 }
 
 /**
@@ -106,12 +259,29 @@ export function readWindowBoardRoute(
       ? { pathname: window.location.pathname, hash: window.location.hash }
       : { pathname: "/", hash: "" },
 ): BoardRoute {
+  const app = readWindowAppRoute(getLocation);
+  if (app.kind === "board") {
+    return {
+      remoteSlug: app.remoteSlug,
+      boardId: app.boardId,
+      cardId: app.cardId,
+    };
+  }
+  return { remoteSlug: null, boardId: null, cardId: null };
+}
+
+export function readWindowAppRoute(
+  getLocation: () => { pathname: string; hash: string } = () =>
+    typeof window !== "undefined"
+      ? { pathname: window.location.pathname, hash: window.location.hash }
+      : { pathname: "/", hash: "" },
+): AppRoute {
   const { pathname, hash } = getLocation();
   if (hash && hash.length > 1) {
-    const fromHash = parseBoardRoute(hash);
-    if (fromHash.boardId) return fromHash;
+    const fromHash = parseAppRoute(hash);
+    if (fromHash.kind !== "home") return fromHash;
   }
-  return parseBoardRoute(pathname);
+  return parseAppRoute(pathname);
 }
 
 /**
@@ -128,11 +298,28 @@ export function writeWindowBoardRoute(
     setLocation?: (url: string, replace: boolean) => void;
   },
 ): string {
+  return writeWindowAppRoute(
+    {
+      kind: "board",
+      boardId,
+      cardId: cardId ?? null,
+      remoteSlug: options?.remoteSlug ?? null,
+    },
+    options,
+  );
+}
+
+export function writeWindowAppRoute(
+  route: AppRoute,
+  options?: {
+    replace?: boolean;
+    mode?: "path" | "hash";
+    setLocation?: (url: string, replace: boolean) => void;
+  },
+): string {
   const mode = options?.mode ?? "path";
-  const url =
-    mode === "hash"
-      ? formatBoardRoute(boardId, cardId, options?.remoteSlug)
-      : formatBoardPath(boardId, cardId, options?.remoteSlug);
+  const path = formatAppPath(route);
+  const url = mode === "hash" ? (path === "/" ? "#/" : `#${path}`) : path;
 
   if (options?.setLocation) {
     options.setLocation(url, !!options.replace);
@@ -149,29 +336,27 @@ export function writeWindowBoardRoute(
       if (options?.replace) {
         window.history.replaceState(null, "", url);
       } else {
-        const curRoute = parseBoardRoute(window.location.pathname);
-        const sameBoard =
-          formatBoardPath(boardId, null, options?.remoteSlug) ===
-          formatBoardPath(curRoute.boardId, null, curRoute.remoteSlug);
-        if (sameBoard) {
-          window.history.replaceState(null, "", url);
-        } else {
-          window.history.pushState(null, "", url);
-        }
+        window.history.pushState(null, "", url);
       }
     }
   }
   return url;
 }
 
-/** True if path is a board deep-link SPA route (server should serve index HTML). */
+/** True if path is an SPA route (server should serve index HTML). */
 export function isSpaBoardPath(pathname: string): boolean {
-  const p = pathname.split("?")[0] ?? "";
-  return (
+  const p = (pathname.split("?")[0] ?? "").replace(/\/+$/, "") || "/";
+  if (
     p === "/" ||
     p === "/board" ||
     p === "/index.html" ||
-    /^\/b\/[^/]+(?:\/[^/]+)?\/?$/.test(p) ||
-    /^\/r\/[^/]+\/b\/[^/]+(?:\/[^/]+)?\/?$/.test(p)
+    p === "/settings"
+  ) {
+    return true;
+  }
+  if (p.startsWith("/settings/")) return true;
+  return (
+    /^\/b\/[^/]+(?:\/[^/]+)?$/.test(p) ||
+    /^\/r\/[^/]+\/b\/[^/]+(?:\/[^/]+)?$/.test(p)
   );
 }

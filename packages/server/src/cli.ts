@@ -6,14 +6,26 @@
  *   kanbanly merge-driver %O %A %B
  *   kanbanly setup --code <path> --boards <path> --remote <url> [--board <id>]
  *   kanbanly skill-install [--path <dir>]
+ *   kanbanly session-end --repo <path> --board <id> --card <id> --summary <text> [--agent <name>] [--status <text>] [--sha <short>]
+ *   kanbanly session-start --repo <path> --board <id> [--agent <name>]
+ *   kanbanly fleet-digest --repo <path> [--json] [--fail-on-high] [--only-issues] [--webhook <url>]
  */
 import { resolve } from "node:path";
 import {
+  applySessionEnd,
+  buildFleetHealth,
+  buildSessionStartBrief,
+  canAgentPickup,
+  countCommitsInWindow,
+  fleetWebhookPayload,
+  formatFleetDigest,
+  formatSessionStartBrief,
   kanbanlySetup,
   runMergeDriver,
   skillInstall,
+  type PortfolioBoardInput,
 } from "@kanbanly/core";
-import { connectLocalRepo } from "./connect.ts";
+import { connectLocalRepo, type ConnectedRepo } from "./connect.ts";
 import { startServer } from "./app.ts";
 
 export const DEFAULT_HOST = process.env.KANBANLY_HOST?.trim() || "127.0.0.1";
@@ -22,7 +34,7 @@ export const DEFAULT_PORT = Number(process.env.KANBANLY_PORT) || 3847;
 export const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
 function printUsage(): void {
-  console.log(`kanbanly — git-backed kanban
+  console.log(`kanbanly — Kanban for ADHD
 
 Default OSS posture is Docker:
   docker compose -f deploy/compose.yaml up --build
@@ -33,6 +45,11 @@ Usage:
   kanbanly merge-driver <ancestor> <ours> <theirs>
   kanbanly setup --code <path> --boards <path> --remote <url> [--board <id>]
   kanbanly skill-install [--path <dir>]
+  kanbanly session-end --repo <boards> --board <id> --card <id> --summary <text>
+                       [--agent <name>] [--status <text>] [--sha <short>]
+  kanbanly session-start --repo <boards> --board <id> [--agent <name>]
+  kanbanly fleet-digest --repo <boards> [--json] [--fail-on-high] [--only-issues]
+                        [--webhook <url>]
 
 Options:
   --host   Bind address (default: $KANBANLY_HOST or 127.0.0.1). Non-loopback warns.
@@ -43,12 +60,27 @@ Options:
   --remote Boards remote URL for setup
   --board  Layout A board id when scaffolding (default: backend)
   --path   Target directory for skill-install
+  --card   Card id for session-end
+  --summary  Session-end summary line (required for session-end)
+  --agent  Actor name for Log (default: agent)
+  --status Optional ## Status overwrite on session-end
+  --sha    Optional short code commit SHA to include in Log
+  --json   fleet-digest: print JSON instead of text
+  --fail-on-high  fleet-digest: exit 1 when high-severity issues exist
+  --only-issues   fleet-digest: print/post only when not ok (silence healthy fleets)
+  --webhook  fleet-digest: POST Slack-compatible payload to URL
   -h, --help  Show this help
 
 Environment:
   KANBANLY_HOST   Default bind host
   KANBANLY_PORT   Default port
   KANBANLY_REPO   Default --repo path (used by Docker entrypoint as /boards)
+
+Fleet digest (cron / Slack):
+  kanbanly fleet-digest --repo ~/boards --fail-on-high
+  curl -sf "http://127.0.0.1:3847/api/fleet-health?format=text"
+  # every 30m, only when broken, post to Slack:
+  # */30 * * * * kanbanly fleet-digest --repo /boards --only-issues --webhook "$SLACK_URL" --fail-on-high
 `);
 }
 
@@ -63,6 +95,15 @@ export function parseArgs(argv: string[]): {
   remote?: string;
   board?: string;
   path?: string;
+  card?: string;
+  summary?: string;
+  agent?: string;
+  status?: string;
+  sha?: string;
+  webhook?: string;
+  json: boolean;
+  failOnHigh: boolean;
+  onlyIssues: boolean;
   help: boolean;
   rest: string[];
 } {
@@ -91,8 +132,23 @@ export function parseArgs(argv: string[]): {
   let remote: string | undefined;
   let board: string | undefined;
   let path: string | undefined;
+  let card: string | undefined;
+  let summary: string | undefined;
+  let agent: string | undefined;
+  let status: string | undefined;
+  let sha: string | undefined;
+  let webhook: string | undefined;
+  let json = false;
+  let failOnHigh = false;
+  let onlyIssues = false;
   let help = false;
   const rest: string[] = [];
+
+  const take = (i: number): string => {
+    const v = args[i + 1];
+    if (!v || v.startsWith("-")) return "";
+    return v;
+  };
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
@@ -130,12 +186,110 @@ export function parseArgs(argv: string[]): {
       path = args[++i]!;
     } else if (a.startsWith("--path=")) {
       path = a.slice("--path=".length);
+    } else if (a === "--card" && take(i)) {
+      card = args[++i]!;
+    } else if (a.startsWith("--card=")) {
+      card = a.slice("--card=".length);
+    } else if (a === "--summary" && take(i)) {
+      summary = args[++i]!;
+    } else if (a.startsWith("--summary=")) {
+      summary = a.slice("--summary=".length);
+    } else if (a === "--agent" && take(i)) {
+      agent = args[++i]!;
+    } else if (a.startsWith("--agent=")) {
+      agent = a.slice("--agent=".length);
+    } else if (a === "--status" && take(i)) {
+      status = args[++i]!;
+    } else if (a.startsWith("--status=")) {
+      status = a.slice("--status=".length);
+    } else if (a === "--sha" && take(i)) {
+      sha = args[++i]!;
+    } else if (a.startsWith("--sha=")) {
+      sha = a.slice("--sha=".length);
+    } else if (a === "--webhook" && take(i)) {
+      webhook = args[++i]!;
+    } else if (a.startsWith("--webhook=")) {
+      webhook = a.slice("--webhook=".length);
+    } else if (a === "--json") {
+      json = true;
+    } else if (a === "--fail-on-high") {
+      failOnHigh = true;
+    } else if (a === "--only-issues") {
+      onlyIssues = true;
     } else if (!a.startsWith("-")) {
       rest.push(a);
     }
   }
 
-  return { command, host, port, repo, code, boards, remote, board, path, help, rest };
+  return {
+    command,
+    host,
+    port,
+    repo,
+    code,
+    boards,
+    remote,
+    board,
+    path,
+    card,
+    summary,
+    agent,
+    status,
+    sha,
+    webhook,
+    json,
+    failOnHigh,
+    onlyIssues,
+    help,
+    rest,
+  };
+}
+
+/** Load all boards into portfolio inputs (local CLI, no index store). */
+export async function loadPortfolioInputs(
+  connected: ConnectedRepo,
+): Promise<PortfolioBoardInput[]> {
+  const listed = await connected.storage.listBoards();
+  if (!listed.ok) return [];
+  const inputs: PortfolioBoardInput[] = [];
+  for (const summary of listed.value) {
+    const boardRead = await connected.storage.readBoard(summary.id);
+    if (!boardRead.ok) continue;
+    const cardsListed = await connected.storage.listCards(summary.id);
+    const cards: PortfolioBoardInput["cards"] = [];
+    if (cardsListed.ok) {
+      for (const ref of cardsListed.value) {
+        const c = await connected.storage.readCard(summary.id, ref.id);
+        if (!c.ok) continue;
+        cards.push({
+          id: c.value.frontmatter.id,
+          title: c.value.frontmatter.title,
+          column: c.value.frontmatter.column,
+          priority: c.value.frontmatter.priority,
+          assignee: c.value.frontmatter.assignee,
+          updated: c.value.frontmatter.updated,
+          log: c.value.log ?? [],
+        });
+      }
+    }
+    let codeCommits7d: number | null = null;
+    let codeCommits24h: number | null = null;
+    const hist = connected.storage.codeHistory(summary.id, { limit: 100 });
+    if (hist.ok && hist.value.bound) {
+      codeCommits7d = countCommitsInWindow(hist.value.commits, 7);
+      codeCommits24h = countCommitsInWindow(hist.value.commits, 1);
+    }
+    inputs.push({
+      id: summary.id,
+      title: boardRead.value.title?.trim() || summary.id,
+      columns: boardRead.value.columns.map((c) => ({ id: c.id, name: c.name })),
+      cards,
+      settings: (boardRead.value.settings ?? {}) as Record<string, unknown>,
+      codeCommits7d,
+      codeCommits24h,
+    });
+  }
+  return inputs;
 }
 
 /** Returns true if host is loopback (no warning needed). Exported for tests. */
@@ -220,6 +374,163 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     return;
   }
 
+  if (opts.command === "session-start") {
+    const repoPath = opts.repo ? resolve(opts.repo) : undefined;
+    const boardId = opts.board?.trim();
+    if (!repoPath || !boardId) {
+      console.error(
+        "Usage: kanbanly session-start --repo <boards> --board <id> [--agent name]",
+      );
+      process.exit(2);
+    }
+    const connected = await connectLocalRepo(repoPath, { scaffold: false });
+    const boardRead = await connected.storage.readBoard(boardId);
+    if (!boardRead.ok) {
+      console.error(`Board not found: ${boardId}`);
+      process.exit(1);
+    }
+    const listed = await connected.storage.listCards(boardId);
+    const cards: Array<{
+      id: string;
+      title: string;
+      column: string;
+      priority?: string;
+      assignee?: string;
+    }> = [];
+    if (listed.ok) {
+      for (const ref of listed.value) {
+        const c = await connected.storage.readCard(boardId, ref.id);
+        if (!c.ok) continue;
+        cards.push({
+          id: c.value.frontmatter.id,
+          title: c.value.frontmatter.title,
+          column: c.value.frontmatter.column,
+          priority: c.value.frontmatter.priority,
+          assignee: c.value.frontmatter.assignee,
+        });
+      }
+    }
+    const notes = connected.storage.readNotes(boardId);
+    let commits: Array<{
+      sha: string;
+      date: string;
+      author: string;
+      subject: string;
+    }> = [];
+    const hist = connected.storage.codeHistory(boardId, { limit: 10 });
+    if (hist.ok && hist.value.bound) {
+      commits = hist.value.commits;
+    }
+    const brief = buildSessionStartBrief({
+      boardId,
+      boardTitle:
+        boardRead.value.title?.trim() || boardId,
+      notesBody: notes.ok ? notes.value.body : "",
+      cards,
+      commits,
+      settings: boardRead.value.settings as Record<string, unknown>,
+      actor: opts.agent?.trim() || "agent",
+    });
+    console.log(formatSessionStartBrief(brief));
+    return;
+  }
+
+  if (opts.command === "session-end") {
+    const repoPath = opts.repo ? resolve(opts.repo) : undefined;
+    const boardId = opts.board?.trim();
+    const cardId = opts.card?.trim();
+    const summary = opts.summary?.trim();
+    if (!repoPath || !boardId || !cardId || !summary) {
+      console.error(
+        "Usage: kanbanly session-end --repo <boards> --board <id> --card <id> --summary <text> [--agent name] [--status text] [--sha short]",
+      );
+      process.exit(2);
+    }
+    const connected = await connectLocalRepo(repoPath, { scaffold: false });
+    const read = await connected.storage.readCard(boardId, cardId);
+    if (!read.ok) {
+      console.error(
+        `Card not found: ${boardId}/${cardId} (${read.error.kind})`,
+      );
+      process.exit(1);
+    }
+    const actor = opts.agent?.trim() || "agent";
+    const pickup = canAgentPickup(read.value, actor);
+    if (!pickup.ok) {
+      console.error(`Pickup warning: ${pickup.reason}`);
+      // Still allow session-end (work may finish from Review etc.)
+    }
+    const ended = applySessionEnd({
+      card: read.value,
+      summary,
+      actor,
+      status: opts.status,
+      sha: opts.sha,
+    });
+    // Prefer Doing when ending if still on Ready
+    if (ended.card.frontmatter.column === "ready") {
+      ended.card.frontmatter.column = "doing";
+    }
+    const w = await connected.storage.writeCard(boardId, ended.card, {
+      message: `chore(board): session-end ${cardId}`,
+    });
+    if (!w.ok) {
+      console.error(`Write failed: ${w.error.kind} ${w.error.message ?? ""}`);
+      process.exit(1);
+    }
+    console.log(`session-end ok card=${cardId} board=${boardId}`);
+    console.log(`log: ${ended.logLine}`);
+    if (w.value.sha) console.log(`sha: ${w.value.sha}`);
+    return;
+  }
+
+  if (opts.command === "fleet-digest") {
+    const repoPath = opts.repo ? resolve(opts.repo) : undefined;
+    if (!repoPath) {
+      console.error(
+        "Usage: kanbanly fleet-digest --repo <boards> [--json] [--fail-on-high] [--only-issues] [--webhook <url>]",
+      );
+      process.exit(2);
+    }
+    const connected = await connectLocalRepo(repoPath, { scaffold: false });
+    const inputs = await loadPortfolioInputs(connected);
+    const health = buildFleetHealth(inputs);
+    if (opts.onlyIssues && health.ok) {
+      // Quiet success for cron when fleet is healthy
+      if (opts.failOnHigh) process.exit(0);
+      return;
+    }
+    if (opts.json) {
+      console.log(JSON.stringify({ ...health, tiles: undefined }, null, 2));
+    } else {
+      console.log(formatFleetDigest(health));
+    }
+    if (opts.webhook) {
+      const payload = fleetWebhookPayload(health);
+      try {
+        const res = await fetch(opts.webhook, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          console.error(
+            `webhook POST failed: ${res.status} ${res.statusText}`,
+          );
+          process.exit(1);
+        }
+        console.error(`webhook posted ok (${res.status})`);
+      } catch (e) {
+        console.error(`webhook error: ${e instanceof Error ? e.message : e}`);
+        process.exit(1);
+      }
+    }
+    if (opts.failOnHigh && health.highCount > 0) {
+      process.exit(1);
+    }
+    return;
+  }
+
   if (opts.command !== "serve") {
     console.error(`Unknown command: ${opts.command}`);
     printUsage();
@@ -255,7 +566,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   console.log(`  POST /api/connect   (path | url + optional token)`);
   console.log(`  GET  /api/remotes   (multi-remote sidebar)`);
   console.log(`  GET  /api/boards`);
+  console.log(`  POST /api/boards  (create board)`);
   console.log(`  GET  /api/boards/:boardId`);
+  console.log(`  POST /api/boards/:boardId/columns  (add list)`);
+  console.log(`  PUT  /api/boards/:boardId/columns  (reorder)`);
+  console.log(`  PATCH/DELETE /api/boards/:boardId/columns/:colId`);
   console.log(`  POST /api/boards/:boardId/cards`);
   console.log(`  POST /api/boards/:boardId/cards/:cardId/move`);
   console.log(`  GET  /api/events  (SSE board updates)`);

@@ -33,6 +33,7 @@ export type QuarantineItem = {
 
 export type BoardDetail = {
   id: string;
+  title?: string;
   path: string;
   columns: BoardColumn[];
   labels: unknown[];
@@ -47,6 +48,8 @@ export type BoardDetail = {
 
 export type BoardSummary = {
   id: string;
+  /** Human title from board.yml when set */
+  title?: string;
   path: string;
   columns: string[];
   cardCount: number;
@@ -195,6 +198,259 @@ export async function createCard(
   return res.json();
 }
 
+/** Append a column to board.yml (Trello-style add list). */
+export async function addColumn(
+  boardId: string,
+  name: string,
+  id?: string,
+): Promise<{
+  ok: boolean;
+  column: BoardColumn;
+  columns: BoardColumn[];
+  sha?: string;
+  sync?: SyncState | null;
+}> {
+  const res = await fetch(
+    `/api/boards/${encodeURIComponent(boardId)}/columns`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name, id }),
+    },
+  );
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`addColumn failed: ${res.status} ${err}`);
+  }
+  return res.json();
+}
+
+export async function renameColumn(
+  boardId: string,
+  columnId: string,
+  name: string,
+): Promise<{
+  ok: boolean;
+  column: BoardColumn;
+  columns: BoardColumn[];
+  sha?: string;
+  sync?: SyncState | null;
+}> {
+  const res = await fetch(
+    `/api/boards/${encodeURIComponent(boardId)}/columns/${encodeURIComponent(columnId)}`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    },
+  );
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`renameColumn failed: ${res.status} ${err}`);
+  }
+  return res.json();
+}
+
+export async function reorderColumns(
+  boardId: string,
+  order: string[],
+): Promise<{
+  ok: boolean;
+  columns: BoardColumn[];
+  sha?: string;
+  sync?: SyncState | null;
+}> {
+  const res = await fetch(
+    `/api/boards/${encodeURIComponent(boardId)}/columns`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ order }),
+    },
+  );
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`reorderColumns failed: ${res.status} ${err}`);
+  }
+  return res.json();
+}
+
+/** Delete a list. If it has cards, pass moveTo column id or "archive". */
+export async function deleteColumn(
+  boardId: string,
+  columnId: string,
+  moveTo?: string,
+): Promise<{
+  ok: boolean;
+  columns: BoardColumn[];
+  moved?: number;
+  archived?: number;
+  sha?: string;
+  sync?: SyncState | null;
+}> {
+  const res = await fetch(
+    `/api/boards/${encodeURIComponent(boardId)}/columns/${encodeURIComponent(columnId)}`,
+    {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(moveTo ? { moveTo } : {}),
+    },
+  );
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`deleteColumn failed: ${res.status} ${err}`);
+  }
+  return res.json();
+}
+
+/** Create a layout-A board subdirectory. */
+export async function createBoard(
+  name: string,
+  options?: {
+    id?: string;
+    boardDir?: string;
+    credentialId?: string | null;
+    remoteSlug?: string;
+  },
+): Promise<{
+  ok: boolean;
+  boardId: string;
+  remoteSlug?: string | null;
+  sha?: string;
+  sync?: SyncState | null;
+}> {
+  const res = await fetch(`/api/boards`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name,
+      id: options?.id ?? options?.boardDir,
+      boardDir: options?.boardDir,
+      credentialId: options?.credentialId,
+      remoteSlug: options?.remoteSlug,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`createBoard failed: ${res.status} ${err}`);
+  }
+  return res.json();
+}
+
+export type WorkspaceCredential = {
+  id: string;
+  label: string;
+  username: string;
+  updatedAt: string;
+};
+
+export type WorkspaceConnection = {
+  id: string;
+  label: string;
+  localPath: string;
+  remoteUrl: string | null;
+  defaultCredentialId: string | null;
+  active: boolean;
+  boardCount: number;
+  cardCount: number;
+  sha: string;
+};
+
+export type WorkspaceBoard = {
+  key: string;
+  boardId: string;
+  boardDir: string;
+  label: string;
+  cardCount: number;
+  remoteSlug: string;
+  remoteLabel: string;
+  localPath: string;
+  remoteUrl: string | null;
+  credentialId: string | null;
+  connectionDefaultCredentialId: string | null;
+  resolvedCredentialId: string | null;
+  activeRemote: boolean;
+  sha: string;
+};
+
+export type WorkspaceSnapshot = {
+  connections: WorkspaceConnection[];
+  boards: WorkspaceBoard[];
+  credentials: WorkspaceCredential[];
+  activeRemote: string | null;
+};
+
+export async function getWorkspace(): Promise<WorkspaceSnapshot> {
+  const res = await fetch("/api/workspace");
+  if (!res.ok) throw new Error(`getWorkspace failed: ${res.status}`);
+  return res.json();
+}
+
+export async function patchBoardBinding(input: {
+  remoteSlug: string;
+  boardId: string;
+  fromRemoteSlug?: string;
+  credentialId?: string | null;
+  label?: string;
+  boardDir?: string;
+}): Promise<{ ok: boolean }> {
+  const res = await fetch("/api/workspace/boards", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(`patchBoardBinding failed: ${res.status}`);
+  return res.json();
+}
+
+export async function patchConnection(input: {
+  id: string;
+  defaultCredentialId?: string | null;
+  label?: string;
+}): Promise<{ ok: boolean }> {
+  const res = await fetch("/api/workspace/connections", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(`patchConnection failed: ${res.status}`);
+  return res.json();
+}
+
+export async function listCredentialBook(): Promise<{
+  credentials: WorkspaceCredential[];
+}> {
+  const res = await fetch("/api/credentials/book");
+  if (!res.ok) throw new Error(`listCredentialBook failed: ${res.status}`);
+  return res.json();
+}
+
+export async function upsertCredentialBook(input: {
+  id?: string;
+  label: string;
+  username?: string;
+  token?: string;
+}): Promise<{ ok: boolean; credential: WorkspaceCredential }> {
+  const res = await fetch("/api/credentials/book", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`upsertCredentialBook failed: ${res.status} ${err}`);
+  }
+  return res.json();
+}
+
+export async function deleteCredentialBook(id: string): Promise<void> {
+  const res = await fetch(
+    `/api/credentials/book/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) throw new Error(`deleteCredentialBook failed: ${res.status}`);
+}
+
 export type BoardLiveEvent = {
   type: "board";
   sha: string;
@@ -270,6 +526,258 @@ export type CredentialStatus = {
   username?: string;
   updatedAt?: string;
 };
+
+export type ProjectCommit = {
+  sha: string;
+  date: string;
+  author: string;
+  subject: string;
+  url?: string | null;
+  /** Board card ids mentioned in the subject (when present on this board). */
+  cardIds?: string[];
+};
+
+export type PortfolioTile = {
+  boardId: string;
+  title: string;
+  cardCount: number;
+  columnCounts: Record<string, number>;
+  p0Count: number;
+  doingCount: number;
+  blockedCount: number;
+  readyCount?: number;
+  lastUpdated: string | null;
+  lastActivity: {
+    date: string;
+    line: string;
+    actor?: string;
+    cardId: string;
+    cardTitle: string;
+  } | null;
+  lastAgent: string | null;
+  staleDoingCount: number;
+  codeBound: boolean;
+  wipDoing?: { count: number; limit: number; over: boolean };
+  health?: string;
+  velocity?: {
+    windowDays: number;
+    done7d: number;
+    review7d: number;
+    logEvents7d: number;
+    agentEvents7d: number;
+    pulseAgeHours: number | null;
+    codeCommits7d: number | null;
+    codeCommits24h: number | null;
+  };
+};
+
+export type PortfolioResponse = {
+  tiles: PortfolioTile[];
+  activity: Array<{
+    date: string;
+    line: string;
+    actor?: string;
+    cardId: string;
+    cardTitle: string;
+    boardId: string;
+    boardTitle: string;
+  }>;
+  p0Total: number;
+  staleTotal: number;
+  velocity?: {
+    windowDays: number;
+    done7d: number;
+    logEvents7d: number;
+    agentEvents7d: number;
+    codeCommits7d: number;
+    codeCommits24h: number;
+  };
+  sha: string | null;
+};
+
+export async function getPortfolio(): Promise<PortfolioResponse> {
+  const res = await fetch("/api/portfolio");
+  if (!res.ok) throw new Error(`getPortfolio failed: ${res.status}`);
+  return res.json();
+}
+
+export type FleetHealthResponse = {
+  ok: boolean;
+  generatedAt: string;
+  boardCount: number;
+  issueCount: number;
+  highCount: number;
+  issues: Array<{
+    kind: string;
+    severity: string;
+    boardId: string;
+    boardTitle: string;
+    message: string;
+    cardId?: string;
+  }>;
+  summary: {
+    p0Total: number;
+    staleTotal: number;
+    wipOverBoards: number;
+    silentBoards: number;
+    blockedTotal: number;
+  };
+  sha: string | null;
+};
+
+/** Unattended fleet monitor: high-severity issues across boards. */
+export async function getFleetHealth(options?: {
+  staleHours?: number;
+  silentHours?: number;
+}): Promise<FleetHealthResponse> {
+  const q = new URLSearchParams();
+  if (options?.staleHours != null) q.set("staleHours", String(options.staleHours));
+  if (options?.silentHours != null) {
+    q.set("silentHours", String(options.silentHours));
+  }
+  const qs = q.toString();
+  const res = await fetch(`/api/fleet-health${qs ? `?${qs}` : ""}`);
+  if (!res.ok) throw new Error(`getFleetHealth failed: ${res.status}`);
+  return res.json();
+}
+
+export type CodeHistoryResponse = {
+  boardId: string;
+  source: "code";
+  bound: boolean;
+  binding: { path?: string; remote?: string } | null;
+  codePath: string | null;
+  error: string | null;
+  commits: ProjectCommit[];
+  count: number;
+};
+
+/** Project/code-repo commits (not boards-repo history). */
+export async function getCodeHistory(
+  boardId: string,
+  limit = 50,
+): Promise<CodeHistoryResponse> {
+  const res = await fetch(
+    `/api/boards/${encodeURIComponent(boardId)}/code-history?limit=${limit}`,
+  );
+  if (!res.ok) throw new Error(`getCodeHistory failed: ${res.status}`);
+  return res.json();
+}
+
+export async function setCodeBinding(
+  boardId: string,
+  body: {
+    path?: string | null;
+    remote?: string | null;
+    url?: string | null;
+    clear?: boolean;
+    token?: string;
+    username?: string;
+    credentialId?: string;
+  },
+): Promise<{
+  ok: boolean;
+  settings: Record<string, unknown>;
+  sha?: string;
+  source?: {
+    path: string;
+    remote: string | null;
+    cloned: boolean;
+    fetched: boolean;
+  } | null;
+  history?: {
+    bound: boolean;
+    commits: ProjectCommit[];
+    count: number;
+    error: string | null;
+    codePath: string | null;
+  } | null;
+}> {
+  const res = await fetch(
+    `/api/boards/${encodeURIComponent(boardId)}/code-binding`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`setCodeBinding failed: ${res.status} ${await res.text()}`);
+  }
+  return res.json();
+}
+
+/** Connect/bind a source code remote (clone + auth) for a board. */
+export async function connectCodeSource(
+  boardId: string,
+  body: {
+    url?: string;
+    remote?: string;
+    path?: string;
+    token?: string;
+    username?: string;
+    credentialId?: string;
+  },
+): Promise<{
+  ok: boolean;
+  settings: Record<string, unknown>;
+  source?: {
+    path: string;
+    remote: string | null;
+    cloned: boolean;
+    fetched: boolean;
+  } | null;
+  history?: {
+    bound: boolean;
+    commits: ProjectCommit[];
+    count: number;
+    error: string | null;
+    codePath: string | null;
+  } | null;
+}> {
+  const res = await fetch(
+    `/api/boards/${encodeURIComponent(boardId)}/code-source`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `connectCodeSource failed: ${res.status} ${await res.text()}`,
+    );
+  }
+  return res.json();
+}
+
+export async function getBoardNotes(
+  boardId: string,
+): Promise<{ boardId: string; body: string; path: string; exists: boolean }> {
+  const res = await fetch(
+    `/api/boards/${encodeURIComponent(boardId)}/notes`,
+  );
+  if (!res.ok) throw new Error(`getBoardNotes failed: ${res.status}`);
+  return res.json();
+}
+
+export async function putBoardNotes(
+  boardId: string,
+  body: string,
+): Promise<{ ok: boolean; path: string; sha?: string }> {
+  const res = await fetch(
+    `/api/boards/${encodeURIComponent(boardId)}/notes`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ body }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`putBoardNotes failed: ${res.status} ${await res.text()}`);
+  }
+  return res.json();
+}
 
 export async function getSync(): Promise<SyncState> {
   const res = await fetch("/api/sync");

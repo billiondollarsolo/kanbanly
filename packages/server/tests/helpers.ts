@@ -106,6 +106,61 @@ settings: {}
   };
 }
 
+/**
+ * Bare remote + working clone for push/pull round-trips (no network).
+ */
+export function makeBareRemotePair(): {
+  root: string;
+  bare: string;
+  clone: string;
+  cleanup: () => void;
+} {
+  const root = mkdtempSync(join(tmpdir(), "kanbanly-bare-"));
+  const bare = join(root, "remote.git");
+  const seed = join(root, "seed");
+  const clone = join(root, "clone");
+  mkdirSync(bare, { recursive: true });
+  git(bare, ["init", "--bare"]);
+  git(root, ["clone", bare, seed]);
+  git(seed, ["config", "user.name", "seed"]);
+  git(seed, ["config", "user.email", "s@s"]);
+  mkdirSync(join(seed, "backend", "cards"), { recursive: true });
+  writeFileSync(
+    join(seed, "backend", "board.yml"),
+    `columns:
+  - id: backlog
+    name: Backlog
+  - id: doing
+    name: Doing
+  - id: review
+    name: Review
+  - id: done
+    name: Done
+labels: []
+settings: {}
+`,
+  );
+  git(seed, ["add", "."]);
+  git(seed, ["commit", "-m", "init"]);
+  git(seed, ["branch", "-M", "main"]);
+  git(seed, ["push", "-u", "origin", "main"]);
+  git(root, ["clone", bare, clone]);
+  git(clone, ["config", "user.name", "w"]);
+  git(clone, ["config", "user.email", "w@w"]);
+  return {
+    root,
+    bare,
+    clone,
+    cleanup: () => {
+      try {
+        rmSync(root, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+    },
+  };
+}
+
 export function fileExists(path: string): boolean {
   return existsSync(path);
 }

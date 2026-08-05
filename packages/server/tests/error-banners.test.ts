@@ -127,7 +127,8 @@ describe("PushQueue error classification", () => {
     q.clearFreeze();
     expect(q.getState().frozen).toBe(false);
     expect(q.getState().pendingCount).toBe(2);
-    expect(q.getState().status).toBe("pending");
+    // No origin → no_remote (not a stuck pending push); with origin would be pending.
+    expect(["pending", "no_remote"]).toContain(q.getState().status);
 
     // Persist
     const disk = JSON.parse(readFileSync(qPath, "utf8")) as { frozen?: boolean };

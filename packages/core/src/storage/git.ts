@@ -9,7 +9,17 @@ import {
   unlinkSync,
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { parseBoard, type Board } from "../board.ts";
+import {
+  appendColumn,
+  defaultBoardYaml,
+  parseBoard,
+  removeColumn,
+  renameColumn,
+  reorderColumns,
+  serializeBoard,
+  type Board,
+  type BoardColumn,
+} from "../board.ts";
 import { parseCard, serializeCard, type Card } from "../card.ts";
 import {
   extractConflictSides,
@@ -19,7 +29,21 @@ import {
   resolveConflictText,
   type ConflictResolveChoice,
 } from "../heal.ts";
-import { cardFilename, generateCardId } from "../id.ts";
+import { cardFilename, generateBoardId, generateCardId } from "../id.ts";
+import { orderAfter, orderInitial } from "../order.ts";
+import {
+  defaultCodeCloneRoot,
+  slugFromCodeRemote,
+} from "../code-repo.ts";
+import {
+  boardNotesRelPath,
+  defaultProjectNotes,
+  mergeCodeBindingSettings,
+  parseGitLogLines,
+  resolveCodeBinding,
+  type CodeBinding,
+  type ProjectCommit,
+} from "../project-cockpit.ts";
 import {
   gitAuthEnv,
   type GitCredential,
@@ -214,6 +238,340 @@ export class GitStorage implements BoardStorage {
     return { ok: true, value: parsed.board };
   }
 
+  /**
+   * Write board.yml and commit. Used for column config changes (add list, etc.).
+   */
+  async writeBoard(
+    boardId: string,
+    board: Board,
+    options?: { message?: string },
+  ): Promise<StorageResult<{ sha?: string }>> {
+    try {
+      const path = join(this.boardDir(boardId), "board.yml");
+      if (!existsSync(dirname(path))) {
+        mkdirSync(dirname(path), { recursive: true });
+      }
+      // Re-validate before write
+      const check = parseBoard(serializeBoard(board));
+      if (!check.ok) {
+        return { ok: false, error: { kind: "io", message: check.error.message } };
+      }
+      writeFileSync(path, serializeBoard(check.board), "utf8");
+      const rel = relative(this.repoPath, path);
+      this.git(["add", rel]);
+      const msg =
+        options?.message ?? `chore(board): update board.yml (${boardId})`;
+      const commit = this.git([
+        "-c",
+        `user.name=${this.authorName}`,
+        "-c",
+        `user.email=${this.authorEmail}`,
+        "commit",
+        "-m",
+        msg,
+      ]);
+      if (!commit.ok && !/nothing to commit/i.test(commit.stdout + commit.stderr)) {
+        return {
+          ok: false,
+          error: {
+            kind: "io",
+            message: `commit failed: ${commit.stderr || commit.stdout}`,
+          },
+        };
+      }
+      return { ok: true, value: { sha: this.headSha() } };
+    } catch (cause) {
+      return { ok: false, error: { kind: "io", message: String(cause), cause } };
+    }
+  }
+
+  /**
+   * Append a column to board.yml (Trello-style "add list") and commit.
+   */
+  async addColumn(
+    boardId: string,
+    input: { name: string; id?: string },
+    options?: { message?: string },
+  ): Promise<StorageResult<{ board: Board; column: BoardColumn; sha?: string }>> {
+    const read = await this.readBoard(boardId);
+    if (!read.ok) return read;
+    const appended = appendColumn(read.value, input);
+    if (!appended.ok) {
+      return { ok: false, error: { kind: "io", message: appended.error } };
+    }
+    const w = await this.writeBoard(boardId, appended.board, {
+      message:
+        options?.message ??
+        `chore(board): add column ${appended.column.id} (${appended.column.name})`,
+    });
+    if (!w.ok) return w;
+    return {
+      ok: true,
+      value: {
+        board: appended.board,
+        column: appended.column,
+        sha: w.value.sha,
+      },
+    };
+  }
+
+  /** Rename column display name in board.yml (id unchanged). */
+  async renameColumn(
+    boardId: string,
+    columnId: string,
+    name: string,
+    options?: { message?: string },
+  ): Promise<StorageResult<{ board: Board; column: BoardColumn; sha?: string }>> {
+    const read = await this.readBoard(boardId);
+    if (!read.ok) return read;
+    const renamed = renameColumn(read.value, columnId, name);
+    if (!renamed.ok) {
+      return { ok: false, error: { kind: "io", message: renamed.error } };
+    }
+    const w = await this.writeBoard(boardId, renamed.board, {
+      message:
+        options?.message ??
+        `chore(board): rename column ${columnId} → ${renamed.column.name}`,
+    });
+    if (!w.ok) return w;
+    return {
+      ok: true,
+      value: {
+        board: renamed.board,
+        column: renamed.column,
+        sha: w.value.sha,
+      },
+    };
+  }
+
+  /** Reorder columns in board.yml to match orderedIds. */
+  async reorderColumns(
+    boardId: string,
+    orderedIds: string[],
+    options?: { message?: string },
+  ): Promise<StorageResult<{ board: Board; sha?: string }>> {
+    const read = await this.readBoard(boardId);
+    if (!read.ok) return read;
+    const reordered = reorderColumns(read.value, orderedIds);
+    if (!reordered.ok) {
+      return { ok: false, error: { kind: "io", message: reordered.error } };
+    }
+    const w = await this.writeBoard(boardId, reordered.board, {
+      message: options?.message ?? `chore(board): reorder columns (${boardId})`,
+    });
+    if (!w.ok) return w;
+    return {
+      ok: true,
+      value: { board: reordered.board, sha: w.value.sha },
+    };
+  }
+
+  /**
+   * Delete a column from board.yml.
+   * If cards remain on that column, pass `moveTo` (another column id) or
+   * `moveTo: "archive"` to archive them first.
+   */
+  async deleteColumn(
+    boardId: string,
+    columnId: string,
+    options?: { moveTo?: string; message?: string },
+  ): Promise<
+    StorageResult<{
+      board: Board;
+      sha?: string;
+      moved?: number;
+      archived?: number;
+    }>
+  > {
+    const read = await this.readBoard(boardId);
+    if (!read.ok) return read;
+
+    const listed = await this.listCards(boardId);
+    if (!listed.ok) return listed;
+
+    const inColumn: string[] = [];
+    for (const ref of listed.value) {
+      const card = await this.readCard(boardId, ref.id);
+      if (card.ok && card.value.frontmatter.column === columnId) {
+        inColumn.push(ref.id);
+      }
+    }
+
+    let moved = 0;
+    let archived = 0;
+    const moveTo = options?.moveTo?.trim();
+
+    if (inColumn.length > 0) {
+      if (!moveTo) {
+        return {
+          ok: false,
+          error: {
+            kind: "io",
+            message: `Column "${columnId}" has ${inColumn.length} card(s); pass moveTo (column id or "archive")`,
+          },
+        };
+      }
+      if (moveTo === "archive") {
+        const ar = await this.archiveCards(boardId, inColumn, {
+          message: `chore(board): archive before delete column ${columnId}`,
+        });
+        if (!ar.ok) return ar;
+        archived = ar.value.archived.length;
+      } else {
+        if (!read.value.columns.some((c) => c.id === moveTo)) {
+          return {
+            ok: false,
+            error: { kind: "io", message: `moveTo column not found: ${moveTo}` },
+          };
+        }
+        if (moveTo === columnId) {
+          return {
+            ok: false,
+            error: { kind: "io", message: "moveTo cannot be the column being deleted" },
+          };
+        }
+        // Append to end of target column
+        const targetCards: Array<{ order: string }> = [];
+        for (const ref of listed.value) {
+          if (inColumn.includes(ref.id)) continue;
+          const card = await this.readCard(boardId, ref.id);
+          if (card.ok && card.value.frontmatter.column === moveTo) {
+            targetCards.push({ order: card.value.frontmatter.order });
+          }
+        }
+        targetCards.sort((a, b) =>
+          a.order < b.order ? -1 : a.order > b.order ? 1 : 0,
+        );
+        let lastOrder =
+          targetCards.length > 0 ? targetCards[targetCards.length - 1]!.order : null;
+        for (const cardId of inColumn) {
+          const order = orderAfter(lastOrder) || orderInitial();
+          lastOrder = order;
+          const mv = await this.moveCard(boardId, cardId, moveTo, order, {
+            actor: "human",
+            message: `chore(board): move ${cardId} before delete column ${columnId}`,
+          });
+          if (!mv.ok) return mv;
+          moved++;
+        }
+      }
+    }
+
+    // Re-read board after card ops (still same columns until we write)
+    const again = await this.readBoard(boardId);
+    if (!again.ok) return again;
+    const removed = removeColumn(again.value, columnId);
+    if (!removed.ok) {
+      return { ok: false, error: { kind: "io", message: removed.error } };
+    }
+    const w = await this.writeBoard(boardId, removed.board, {
+      message:
+        options?.message ??
+        `chore(board): delete column ${columnId}${
+          archived ? ` (archived ${archived})` : moved ? ` (moved ${moved})` : ""
+        }`,
+    });
+    if (!w.ok) return w;
+    return {
+      ok: true,
+      value: {
+        board: removed.board,
+        sha: w.value.sha,
+        moved,
+        archived,
+      },
+    };
+  }
+
+  /**
+   * Create a layout-A board subdirectory with starter board.yml + empty cards/.
+   * Id is a unique random `b-…` unless explicitly provided.
+   */
+  async createBoard(
+    input: { name: string; id?: string },
+    options?: { message?: string },
+  ): Promise<StorageResult<{ boardId: string; sha?: string }>> {
+    const name = input.name.trim();
+    if (!name) {
+      return { ok: false, error: { kind: "io", message: "Board name is required" } };
+    }
+
+    const listed = await this.listBoards();
+    if (!listed.ok) return listed;
+    const existing = new Set(listed.value.map((b) => b.id));
+
+    let id: string;
+    if (input.id?.trim()) {
+      id = input.id
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      if (!id || id === "." || id === "..") {
+        return { ok: false, error: { kind: "io", message: "Invalid board id" } };
+      }
+      if (id === "cards" || id === "archive" || id.startsWith(".")) {
+        return {
+          ok: false,
+          error: { kind: "io", message: `Reserved board id: ${id}` },
+        };
+      }
+      if (existing.has(id)) {
+        return {
+          ok: false,
+          error: { kind: "io", message: `Board already exists: ${id}` },
+        };
+      }
+    } else {
+      id = generateBoardId(existing);
+    }
+
+    // If only layout B (root board), still allow layout A siblings.
+    try {
+      const root = this.boardDir(id);
+      if (existsSync(join(root, "board.yml"))) {
+        return { ok: false, error: { kind: "io", message: `Board already exists: ${id}` } };
+      }
+      mkdirSync(join(root, "cards"), { recursive: true });
+      const ymlPath = join(root, "board.yml");
+      writeFileSync(
+        ymlPath,
+        defaultBoardYaml({ id, title: name }),
+        "utf8",
+      );
+      // empty cards dir placeholder so git tracks the tree
+      const keep = join(root, "cards", ".gitkeep");
+      if (!existsSync(keep)) writeFileSync(keep, "", "utf8");
+
+      const relBoard = relative(this.repoPath, ymlPath);
+      const relKeep = relative(this.repoPath, keep);
+      this.git(["add", relBoard, relKeep]);
+      const msg =
+        options?.message ?? `chore(board): create board ${id} (${name})`;
+      const commit = this.git([
+        "-c",
+        `user.name=${this.authorName}`,
+        "-c",
+        `user.email=${this.authorEmail}`,
+        "commit",
+        "-m",
+        msg,
+      ]);
+      if (!commit.ok && !/nothing to commit/i.test(commit.stdout + commit.stderr)) {
+        return {
+          ok: false,
+          error: {
+            kind: "io",
+            message: `commit failed: ${commit.stderr || commit.stdout}`,
+          },
+        };
+      }
+      return { ok: true, value: { boardId: id, sha: this.headSha() } };
+    } catch (cause) {
+      return { ok: false, error: { kind: "io", message: String(cause), cause } };
+    }
+  }
+
   async listCards(boardId: string): Promise<StorageResult<CardRef[]>> {
     const dir = this.cardsDir(boardId);
     if (!existsSync(dir)) {
@@ -333,6 +691,228 @@ export class GitStorage implements BoardStorage {
       });
     }
     return { ok: true, value: entries };
+  }
+
+  /**
+   * Project (code) repo commit history for a board with settings.code.path
+   * (or a managed clone from settings.code.remote). Does **not** list boards-repo commits.
+   */
+  codeHistory(
+    boardId: string,
+    options?: {
+      limit?: number;
+      /** Optional home for resolving ~/.kanbanly/code-clones */
+      home?: string;
+      /** When path missing but remote set, open/fetch managed clone if present */
+      allowManagedClone?: boolean;
+    },
+  ): StorageResult<{
+    bound: boolean;
+    binding: CodeBinding | null;
+    commits: ProjectCommit[];
+    codePath?: string;
+    error?: string;
+  }> {
+    const board = this.readBoardSync(boardId);
+    if (!board.ok) return board;
+    const binding = resolveCodeBinding(board.value.settings);
+    if (!binding?.path && !binding?.remote) {
+      return {
+        ok: true,
+        value: {
+          bound: false,
+          binding,
+          commits: [],
+          error: "No project source bound (settings.code.path or settings.code.remote)",
+        },
+      };
+    }
+
+    let codePath = binding?.path;
+    if (
+      !codePath &&
+      binding?.remote &&
+      options?.allowManagedClone !== false
+    ) {
+      // Resolve managed clone path without re-cloning (read-only probe)
+      const home = options?.home ?? process.env.HOME ?? undefined;
+      const managed = join(
+        defaultCodeCloneRoot(home),
+        slugFromCodeRemote(binding.remote),
+      );
+      if (existsSync(join(managed, ".git"))) {
+        codePath = managed;
+      }
+    }
+
+    if (!codePath) {
+      return {
+        ok: true,
+        value: {
+          bound: false,
+          binding,
+          commits: [],
+          error: binding?.remote
+            ? "Code remote is set but not cloned yet — use Connect source / code-source API"
+            : "No project code path bound (settings.code.path)",
+        },
+      };
+    }
+
+    if (!existsSync(codePath)) {
+      return {
+        ok: true,
+        value: {
+          bound: false,
+          binding,
+          commits: [],
+          codePath,
+          error: `Code path does not exist: ${codePath}`,
+        },
+      };
+    }
+    if (!existsSync(join(codePath, ".git")) && !this.isGitWorkTree(codePath)) {
+      return {
+        ok: true,
+        value: {
+          bound: false,
+          binding,
+          commits: [],
+          codePath,
+          error: `Not a git repository: ${codePath}`,
+        },
+      };
+    }
+    const limit = options?.limit ?? 50;
+    const r = runGit(codePath, [
+      "log",
+      `-n${limit}`,
+      "--format=%H%x09%aI%x09%an%x09%s",
+    ]);
+    if (!r.ok && !r.stdout.trim()) {
+      return {
+        ok: false,
+        error: {
+          kind: "io",
+          message: r.stderr || "git log failed on code repo",
+        },
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        bound: true,
+        binding,
+        commits: parseGitLogLines(r.stdout),
+        codePath,
+      },
+    };
+  }
+
+  /** Persist settings.code path/remote into board.yml and commit. */
+  async setCodeBinding(
+    boardId: string,
+    binding: CodeBinding | null,
+  ): Promise<StorageResult<{ board: Board; sha?: string }>> {
+    const read = await this.readBoard(boardId);
+    if (!read.ok) return read;
+    const settings = mergeCodeBindingSettings(read.value.settings, binding);
+    const next: Board = {
+      ...read.value,
+      labels: read.value.labels ?? [],
+      settings,
+    };
+    const w = await this.writeBoard(boardId, next, {
+      message: `chore(board): set code binding for ${boardId}`,
+    });
+    if (!w.ok) return w;
+    return { ok: true, value: { board: next, sha: w.value.sha } };
+  }
+
+  readNotes(boardId: string): StorageResult<{ body: string; path: string; exists: boolean }> {
+    const rel = boardNotesRelPath(boardId);
+    const abs = join(this.repoPath, rel);
+    if (!existsSync(this.boardDir(boardId))) {
+      return { ok: false, error: { kind: "not_found", path: boardId } };
+    }
+    if (!existsSync(abs)) {
+      return {
+        ok: true,
+        value: { body: "", path: rel, exists: false },
+      };
+    }
+    return {
+      ok: true,
+      value: { body: readFileSync(abs, "utf8"), path: rel, exists: true },
+    };
+  }
+
+  async writeNotes(
+    boardId: string,
+    body: string,
+    options?: { message?: string; title?: string },
+  ): Promise<StorageResult<{ sha?: string; path: string }>> {
+    try {
+      const root = this.boardDir(boardId);
+      if (!existsSync(root) && boardId !== ".") {
+        return { ok: false, error: { kind: "not_found", path: boardId } };
+      }
+      mkdirSync(root, { recursive: true });
+      const rel = boardNotesRelPath(boardId);
+      const abs = join(this.repoPath, rel);
+      const text =
+        body.trim().length > 0
+          ? body.endsWith("\n")
+            ? body
+            : body + "\n"
+          : defaultProjectNotes(options?.title);
+      writeFileSync(abs, text, "utf8");
+      this.git(["add", rel]);
+      const msg =
+        options?.message ?? `chore(board): update NOTES.md (${boardId})`;
+      const commit = this.git([
+        "-c",
+        `user.name=${this.authorName}`,
+        "-c",
+        `user.email=${this.authorEmail}`,
+        "commit",
+        "-m",
+        msg,
+      ]);
+      if (
+        !commit.ok &&
+        !/nothing to commit/i.test(commit.stdout + commit.stderr)
+      ) {
+        return {
+          ok: false,
+          error: {
+            kind: "io",
+            message: `commit failed: ${commit.stderr || commit.stdout}`,
+          },
+        };
+      }
+      return { ok: true, value: { sha: this.headSha(), path: rel } };
+    } catch (cause) {
+      return { ok: false, error: { kind: "io", message: String(cause), cause } };
+    }
+  }
+
+  private readBoardSync(boardId: string): StorageResult<Board> {
+    const path = join(this.boardDir(boardId), "board.yml");
+    if (!existsSync(path)) {
+      return { ok: false, error: { kind: "not_found", path } };
+    }
+    const text = readFileSync(path, "utf8");
+    const parsed = parseBoard(text);
+    if (!parsed.ok) {
+      return { ok: false, error: { kind: "io", message: parsed.error.message } };
+    }
+    return { ok: true, value: parsed.board };
+  }
+
+  private isGitWorkTree(dir: string): boolean {
+    const r = runGit(dir, ["rev-parse", "--is-inside-work-tree"]);
+    return r.ok && r.stdout.trim() === "true";
   }
 
   async readCard(boardId: string, cardId: string): Promise<StorageResult<Card>> {

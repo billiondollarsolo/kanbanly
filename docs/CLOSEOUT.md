@@ -1,5 +1,7 @@
 # Close-out checklist
 
+**kanbanly — Kanban for ADHD.**
+
 Status of residual gaps vs the product plan (`docs/specs/…`).  
 **MVP mechanics for US-1…32 are shipped.** This list is what remains for a literal 100% plan close.
 

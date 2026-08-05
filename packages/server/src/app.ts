@@ -2,16 +2,31 @@ import { dirname, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
+  boardBindingKey,
   buildActivityFeed,
+  CredentialBook,
   CredentialStore,
   defaultCredentialPath,
+  applySessionEnd,
+  buildFleetHealth,
+  buildPortfolio,
+  checkDoingWip,
+  countCommitsInWindow,
+  formatFleetDigest,
+  ensureCodeRepo,
+  extractCardIdsFromText,
   fetchPrStatus,
+  githubCommitUrl,
+  isDoingColumn,
+  isHardWip,
   isSpaBoardPath,
   orderAfter,
   orderForDrop,
   orderInitial,
   themeBootScript,
+  WorkspaceConfig,
   type ConflictResolveChoice,
+  type GitCredential,
 } from "@kanbanly/core";
 import {
   connectLocalRepo,
@@ -117,6 +132,7 @@ function boardPayload(board: IndexedBoard) {
 
   return {
     id: board.id,
+    title: board.board.title?.trim() || board.id,
     path: board.path,
     columns: board.board.columns,
     labels: board.board.labels,
@@ -138,9 +154,10 @@ export function renderBoardAppHtml(): string {
   const hasBundle = existsSync(join(PUBLIC_DIR, "main.js"));
   if (!hasBundle) {
     return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"/><title>kanbanly</title></head>
+<html lang="en"><head><meta charset="utf-8"/><title>kanbanly · Kanban for ADHD</title></head>
 <body style="font-family:system-ui;background:#0f1115;color:#e8eaed;padding:2rem">
   <h1>kanbanly</h1>
+  <p style="opacity:.75">Kanban for ADHD</p>
   <p>Board UI bundle missing. Run <code>bun run --filter @kanbanly/web build</code>.</p>
   <p>API still available at <code>/api/boards</code>.</p>
 </body></html>`;
@@ -150,13 +167,19 @@ export function renderBoardAppHtml(): string {
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>kanbanly</title>
+  <title>kanbanly · Kanban for ADHD</title>
+  <meta name="description" content="kanbanly — Kanban for ADHD. Self-hosted git-backed boards for humans and coding agents."/>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"/>
+  <link rel="apple-touch-icon" href="/assets/logo.svg"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
   <script>${themeBootScript()}</script>
   <link rel="stylesheet" href="/assets/main.css"/>
 </head>
 <body>
   <a class="kb-skip-link" href="#kb-main-board">Skip to board</a>
-  <div id="root" data-testid="root" role="application" aria-label="kanbanly board application"></div>
+  <div id="root" data-testid="root" role="application" aria-label="kanbanly — Kanban for ADHD"></div>
   <div id="kb-sr-live" class="kb-sr-only" aria-live="polite" aria-atomic="true" data-testid="sr-live"></div>
   <script type="module" src="/assets/main.js"></script>
 </body>
@@ -259,11 +282,58 @@ export function createHandler(options: AppOptions = {}) {
     (connected
       ? new CredentialStore(defaultCredentialPath(connected.path))
       : undefined);
+  const credentialBook = new CredentialBook();
+  const workspace = new WorkspaceConfig();
   const pushDebounceMs = options.pushDebounceMs ?? 2000;
   const enablePushQueue = options.enablePushQueue !== false;
 
   if (connected && credentials?.has()) {
     connected.storage.setCredential(credentials.get());
+  }
+
+  /** Apply board- or connection-scoped credential from the book, else legacy store. */
+  function applyResolvedCredential(
+    remoteSlug: string | null | undefined,
+    boardId?: string | null,
+  ): void {
+    if (!connected) return;
+    let cred = credentials?.get() ?? null;
+    if (remoteSlug) {
+      const credId = boardId
+        ? workspace.resolveCredentialId(remoteSlug, boardId)
+        : workspace.get().connections.find((c) => c.id === remoteSlug)
+            ?.defaultCredentialId ?? null;
+      if (credId) {
+        const fromBook = credentialBook.get(credId);
+        if (fromBook) cred = fromBook;
+      }
+    }
+    connected.storage.setCredential(cred);
+  }
+
+  function syncWorkspaceFromRegistry(): void {
+    for (const e of registry.list()) {
+      workspace.upsertConnection({
+        id: e.slug,
+        label: e.label,
+        localPath: e.connected.path,
+        remoteUrl: e.connected.remoteUrl ?? null,
+        defaultCredentialId:
+          workspace.get().connections.find((c) => c.id === e.slug)
+            ?.defaultCredentialId ?? null,
+      });
+      for (const b of e.connected.index.boards) {
+        const existing = workspace.getBoard(e.slug, b.id);
+        workspace.upsertBoard({
+          key: boardBindingKey(e.slug, b.id),
+          boardId: b.id,
+          boardDir: b.id,
+          remoteSlug: e.slug,
+          credentialId: existing?.credentialId ?? null,
+          label: existing?.label ?? b.id,
+        });
+      }
+    }
   }
 
   function attachConnected(next: ConnectedRepo, preferredSlug?: string) {
@@ -272,6 +342,27 @@ export function createHandler(options: AppOptions = {}) {
     credentials = new CredentialStore(defaultCredentialPath(next.path));
     if (credentials.has()) {
       next.storage.setCredential(credentials.get());
+    }
+    applyResolvedCredential(entry.slug);
+    workspace.upsertConnection({
+      id: entry.slug,
+      label: entry.label,
+      localPath: entry.connected.path,
+      remoteUrl: entry.connected.remoteUrl ?? null,
+      defaultCredentialId:
+        workspace.get().connections.find((c) => c.id === entry.slug)
+          ?.defaultCredentialId ?? null,
+    });
+    for (const b of entry.connected.index.boards) {
+      const existing = workspace.getBoard(entry.slug, b.id);
+      workspace.upsertBoard({
+        key: boardBindingKey(entry.slug, b.id),
+        boardId: b.id,
+        boardDir: b.id,
+        remoteSlug: entry.slug,
+        credentialId: existing?.credentialId ?? null,
+        label: existing?.label ?? b.id,
+      });
     }
     live?.setConnected(next);
     if (enablePushQueue) {
@@ -283,6 +374,15 @@ export function createHandler(options: AppOptions = {}) {
       });
     }
     return entry;
+  }
+
+  // Seed workspace from initial connection
+  if (connected) {
+    try {
+      syncWorkspaceFromRegistry();
+    } catch {
+      /* ignore */
+    }
   }
 
   return async function handler(req: Request): Promise<Response> {
@@ -341,6 +441,7 @@ export function createHandler(options: AppOptions = {}) {
       if (credentials.has()) {
         entry.connected.storage.setCredential(credentials.get());
       }
+      applyResolvedCredential(entry.slug);
       live?.setConnected(entry.connected);
       if (enablePushQueue) {
         pushQueue?.stop();
@@ -563,17 +664,181 @@ export function createHandler(options: AppOptions = {}) {
       });
     }
 
-    // Credential status (never returns secret)
+    // Credential status (never returns secret) — legacy single store + book
     if (method === "GET" && path === "/api/credentials") {
-      return json(credentials?.status() ?? { configured: false });
+      return json({
+        ...(credentials?.status() ?? { configured: false }),
+        book: credentialBook.list(),
+      });
     }
 
-    // Re-enter HTTPS credential for push
+    // Named credential book (multi GitHub connections)
+    if (method === "GET" && path === "/api/credentials/book") {
+      return json({ credentials: credentialBook.list() });
+    }
+    if (method === "POST" && path === "/api/credentials/book") {
+      const body = await readJson<{
+        id?: string;
+        label?: string;
+        username?: string;
+        token?: string;
+      }>(req);
+      if (!body?.label?.trim()) {
+        return badRequest("Body must include { label }");
+      }
+      try {
+        const entry = credentialBook.upsert({
+          id: body.id,
+          label: body.label,
+          username: body.username,
+          token: body.token,
+        });
+        return json({ ok: true, credential: entry }, body.id ? 200 : 201);
+      } catch (e) {
+        return badRequest(e instanceof Error ? e.message : String(e));
+      }
+    }
+    const bookItem = path.match(/^\/api\/credentials\/book\/([^/]+)$/);
+    if (method === "DELETE" && bookItem) {
+      const id = decodeURIComponent(bookItem[1]!);
+      const ok = credentialBook.remove(id);
+      if (!ok) return notFound(`Credential not found: ${id}`);
+      return json({ ok: true });
+    }
+
+    // Workspace: boards + connections + bindings (settings progressive disclosure)
+    if (method === "GET" && path === "/api/workspace") {
+      try {
+        syncWorkspaceFromRegistry();
+      } catch {
+        /* ignore */
+      }
+      const ws = workspace.get();
+      const remotes = registry.summaries();
+      const boards = remotes.flatMap((r) =>
+        r.boards.map((b) => {
+          const binding = workspace.getBoard(r.slug, b.id);
+          const indexed = registry
+            .get(r.slug)
+            ?.connected.index.boards.find((x) => x.id === b.id);
+          const title =
+            binding?.label?.trim() ||
+            indexed?.board.title?.trim() ||
+            b.id;
+          return {
+            key: boardBindingKey(r.slug, b.id),
+            boardId: b.id,
+            boardDir: binding?.boardDir ?? b.id,
+            label: title,
+            title,
+            cardCount: b.cardCount,
+            remoteSlug: r.slug,
+            remoteLabel: r.label,
+            localPath: r.path,
+            remoteUrl: r.remoteUrl,
+            credentialId: binding?.credentialId ?? null,
+            connectionDefaultCredentialId:
+              ws.connections.find((c) => c.id === r.slug)?.defaultCredentialId ??
+              null,
+            resolvedCredentialId: workspace.resolveCredentialId(r.slug, b.id),
+            activeRemote: r.active,
+            sha: r.sha,
+          };
+        }),
+      );
+      return json({
+        connections: remotes.map((r) => {
+          const cfg = ws.connections.find((c) => c.id === r.slug);
+          return {
+            id: r.slug,
+            label: r.label,
+            localPath: r.path,
+            remoteUrl: r.remoteUrl,
+            defaultCredentialId: cfg?.defaultCredentialId ?? null,
+            active: r.active,
+            boardCount: r.boards.length,
+            cardCount: r.cardCount,
+            sha: r.sha,
+          };
+        }),
+        boards,
+        credentials: credentialBook.list(),
+        activeRemote: registry.active()?.slug ?? null,
+      });
+    }
+
+    if (method === "PATCH" && path === "/api/workspace/connections") {
+      const body = await readJson<{
+        id?: string;
+        defaultCredentialId?: string | null;
+        label?: string;
+      }>(req);
+      if (!body?.id) return badRequest("Body must include { id }");
+      const existing = workspace.get().connections.find((c) => c.id === body.id);
+      const remote = registry.get(body.id);
+      if (!existing && !remote) {
+        return notFound(`Connection not found: ${body.id}`);
+      }
+      const updated = workspace.upsertConnection({
+        id: body.id,
+        label: body.label ?? existing?.label ?? remote?.label ?? body.id,
+        localPath: existing?.localPath ?? remote?.connected.path ?? "",
+        remoteUrl:
+          existing?.remoteUrl ?? remote?.connected.remoteUrl ?? null,
+        defaultCredentialId:
+          body.defaultCredentialId !== undefined
+            ? body.defaultCredentialId
+            : (existing?.defaultCredentialId ?? null),
+      });
+      if (registry.active()?.slug === body.id) {
+        applyResolvedCredential(body.id);
+      }
+      return json({ ok: true, connection: updated });
+    }
+
+    if (method === "PATCH" && path === "/api/workspace/boards") {
+      const body = await readJson<{
+        remoteSlug?: string;
+        boardId?: string;
+        /** Previous remote when rebinding board → another connection */
+        fromRemoteSlug?: string;
+        credentialId?: string | null;
+        label?: string;
+        boardDir?: string;
+      }>(req);
+      if (!body?.remoteSlug || !body?.boardId) {
+        return badRequest("Body must include { remoteSlug, boardId }");
+      }
+      const fromSlug = body.fromRemoteSlug ?? body.remoteSlug;
+      const existing =
+        workspace.getBoard(fromSlug, body.boardId) ??
+        workspace.getBoard(body.remoteSlug, body.boardId);
+      if (fromSlug !== body.remoteSlug) {
+        workspace.removeBoard(fromSlug, body.boardId);
+      }
+      const binding = workspace.upsertBoard({
+        key: boardBindingKey(body.remoteSlug, body.boardId),
+        boardId: body.boardId,
+        boardDir: body.boardDir ?? existing?.boardDir ?? body.boardId,
+        remoteSlug: body.remoteSlug,
+        credentialId:
+          body.credentialId !== undefined
+            ? body.credentialId
+            : (existing?.credentialId ?? null),
+        label: body.label ?? existing?.label ?? body.boardId,
+      });
+      if (registry.active()?.slug === body.remoteSlug) {
+        applyResolvedCredential(body.remoteSlug, body.boardId);
+      }
+      return json({ ok: true, board: binding });
+    }
+
+    // Re-enter HTTPS credential for push (legacy single store)
     if (method === "POST" && path === "/api/credentials") {
       if (!credentials || !connected) {
         return json({ error: "Credentials not available" }, 503);
       }
-      let body: { token?: string; username?: string };
+      let body: { token?: string; username?: string; label?: string; saveToBook?: boolean };
       try {
         body = (await req.json()) as typeof body;
       } catch {
@@ -584,7 +849,24 @@ export function createHandler(options: AppOptions = {}) {
       }
       credentials.set({ token: body.token, username: body.username });
       connected.storage.setCredential(credentials.get());
-      return json({ ok: true, ...credentials.status() });
+      let bookEntry = null;
+      if (body.saveToBook || body.label) {
+        try {
+          bookEntry = credentialBook.upsert({
+            label: body.label?.trim() || "GitHub PAT",
+            username: body.username,
+            token: body.token,
+          });
+        } catch {
+          /* ignore book errors */
+        }
+      }
+      return json({
+        ok: true,
+        ...credentials.status(),
+        bookEntry,
+        book: credentialBook.list(),
+      });
     }
 
     if (method === "DELETE" && path === "/api/credentials") {
@@ -632,6 +914,7 @@ export function createHandler(options: AppOptions = {}) {
       const idx = indexStore.get(connected.remoteKey);
       const boards = (idx?.boards ?? []).map((b) => ({
         id: b.id,
+        title: b.board.title?.trim() || b.id,
         path: b.path,
         columns: b.board.columns.map((c) => c.id),
         cardCount: b.cards.length,
@@ -639,15 +922,135 @@ export function createHandler(options: AppOptions = {}) {
       return json({ boards, sha: idx?.sha ?? null });
     }
 
+    // Portfolio / multi-project at-a-glance
+    // GET /api/portfolio
+    // Fleet health for unattended agents: GET /api/fleet-health
+    if (
+      method === "GET" &&
+      (path === "/api/portfolio" || path === "/api/fleet-health")
+    ) {
+      if (!connected) {
+        return json(
+          path === "/api/fleet-health"
+            ? {
+                ok: true,
+                boardCount: 0,
+                issueCount: 0,
+                highCount: 0,
+                issues: [],
+                tiles: [],
+                summary: {
+                  p0Total: 0,
+                  staleTotal: 0,
+                  wipOverBoards: 0,
+                  silentBoards: 0,
+                  blockedTotal: 0,
+                },
+                sha: null,
+              }
+            : {
+                tiles: [],
+                activity: [],
+                p0Total: 0,
+                staleTotal: 0,
+                sha: null,
+              },
+        );
+      }
+      await refreshRepo(connected, { indexStore });
+      const idx = indexStore.get(connected.remoteKey);
+      const inputs = (idx?.boards ?? []).map((b) => {
+        const settings = (b.board.settings ?? {}) as Record<string, unknown>;
+        let codeCommits7d: number | null = null;
+        let codeCommits24h: number | null = null;
+        const hist = connected!.storage.codeHistory(b.id, { limit: 100 });
+        if (hist.ok && hist.value.bound) {
+          codeCommits7d = countCommitsInWindow(hist.value.commits, 7);
+          codeCommits24h = countCommitsInWindow(hist.value.commits, 1);
+        } else if (hist.ok && !hist.value.bound) {
+          codeCommits7d = null;
+          codeCommits24h = null;
+        }
+        return {
+          id: b.id,
+          title: b.board.title?.trim() || b.id,
+          columns: b.board.columns.map((c) => ({ id: c.id, name: c.name })),
+          cards: b.cards.map((c) => ({
+            id: c.id,
+            title: c.title,
+            column: c.column,
+            priority: c.priority,
+            assignee: c.assignee,
+            updated: c.updated,
+            log: c.log,
+          })),
+          settings,
+          codeCommits7d,
+          codeCommits24h,
+        };
+      });
+      if (path === "/api/fleet-health") {
+        const silentH = Number(url.searchParams.get("silentHours") ?? 12);
+        const staleH = Number(url.searchParams.get("staleHours") ?? 48);
+        const health = buildFleetHealth(inputs, {
+          silentHours: Number.isFinite(silentH) ? silentH : 12,
+          staleHours: Number.isFinite(staleH) ? staleH : 48,
+        });
+        const format =
+          url.searchParams.get("format")?.toLowerCase() ??
+          (req.headers.get("accept")?.includes("text/plain")
+            ? "text"
+            : "json");
+        if (format === "text" || format === "digest") {
+          return new Response(formatFleetDigest(health), {
+            status: 200,
+            headers: {
+              "content-type": "text/plain; charset=utf-8",
+              "cache-control": "no-store",
+            },
+          });
+        }
+        return json({ ...health, sha: idx?.sha ?? null });
+      }
+      const portfolio = buildPortfolio(inputs, {
+        activityLimit: 50,
+        staleHours: 48,
+        velocityDays: 7,
+      });
+      return json({
+        ...portfolio,
+        sha: idx?.sha ?? null,
+      });
+    }
+
     // Board detail: GET /api/boards/:boardId
     const boardMatch = path.match(/^\/api\/boards\/([^/]+)$/);
     if (method === "GET" && boardMatch) {
       if (!connected) return notFound("No repo connected");
       const boardId = decodeURIComponent(boardMatch[1]!);
+      const slug = registry.active()?.slug ?? null;
+      applyResolvedCredential(slug, boardId);
       await refreshRepo(connected, { indexStore });
       const board = indexStore.getBoard(connected.remoteKey, boardId);
       if (!board) return notFound(`Board not found: ${boardId}`);
-      return json(boardPayload(board));
+      const binding = slug ? workspace.getBoard(slug, boardId) : null;
+      return json({
+        ...boardPayload(board),
+        binding: binding
+          ? {
+              key: binding.key,
+              remoteSlug: binding.remoteSlug,
+              boardDir: binding.boardDir,
+              credentialId: binding.credentialId ?? null,
+              label: binding.label,
+              resolvedCredentialId: slug
+                ? workspace.resolveCredentialId(slug, boardId)
+                : null,
+              localPath: connected.path,
+              remoteUrl: connected.remoteUrl ?? null,
+            }
+          : null,
+      });
     }
 
     // Activity feed: GET /api/boards/:boardId/activity
@@ -669,6 +1072,217 @@ export function createHandler(options: AppOptions = {}) {
         { limit: Number.isFinite(limit) ? limit : 100 },
       );
       return json({ boardId, entries, count: entries.length });
+    }
+
+    // Create board (layout A): POST /api/boards
+    if (method === "POST" && path === "/api/boards") {
+      const body = await readJson<{
+        name?: string;
+        id?: string;
+        credentialId?: string | null;
+        remoteSlug?: string;
+        /** Optional board directory id (defaults to slugified name) */
+        boardDir?: string;
+      }>(req);
+      if (!body?.name?.trim()) {
+        return badRequest("Body must include { name }");
+      }
+
+      // Optionally target a specific connected repo (not only "active")
+      if (body.remoteSlug && registry.get(body.remoteSlug)) {
+        registry.setActive(body.remoteSlug);
+        const entry = registry.active()!;
+        connected = entry.connected;
+        credentials = new CredentialStore(
+          defaultCredentialPath(entry.connected.path),
+        );
+        if (credentials.has()) {
+          entry.connected.storage.setCredential(credentials.get());
+        }
+        applyResolvedCredential(entry.slug);
+        live?.setConnected(entry.connected);
+      }
+
+      if (!connected) return notFound("No repo connected");
+
+      // Prefer random `b-…` ids; only honor explicit `id` (tests / advanced).
+      const boardIdHint = body.id?.trim() || undefined;
+      const created = await connected.storage.createBoard({
+        name: body.name,
+        id: boardIdHint,
+      });
+      if (!created.ok) {
+        return json({ error: created.error }, 400);
+      }
+      const slug = registry.active()?.slug;
+      if (slug) {
+        workspace.upsertBoard({
+          key: boardBindingKey(slug, created.value.boardId),
+          boardId: created.value.boardId,
+          boardDir: created.value.boardId,
+          remoteSlug: slug,
+          credentialId: body.credentialId ?? null,
+          label: body.name.trim(),
+        });
+        applyResolvedCredential(slug, created.value.boardId);
+      }
+      await refreshRepo(connected, { indexStore, force: true });
+      if (created.value.sha) {
+        live?.notifyWrite(created.value.sha);
+        pushQueue?.enqueue(created.value.sha);
+      }
+      return json(
+        {
+          ok: true,
+          boardId: created.value.boardId,
+          sha: created.value.sha,
+          sync: pushQueue?.getState() ?? null,
+          remoteSlug: slug ?? null,
+        },
+        201,
+      );
+    }
+
+    // Add column (list): POST /api/boards/:boardId/columns
+    // Reorder columns: PUT /api/boards/:boardId/columns  { order: string[] }
+    const columnsCollectionMatch = path.match(
+      /^\/api\/boards\/([^/]+)\/columns$/,
+    );
+    if (columnsCollectionMatch) {
+      if (!connected) return notFound("No repo connected");
+      const boardId = decodeURIComponent(columnsCollectionMatch[1]!);
+
+      if (method === "POST") {
+        const body = await readJson<{ name?: string; id?: string }>(req);
+        if (!body?.name?.trim()) {
+          return badRequest("Body must include { name }");
+        }
+
+        await refreshRepo(connected, { indexStore });
+        const board = indexStore.getBoard(connected.remoteKey, boardId);
+        if (!board) return notFound(`Board not found: ${boardId}`);
+
+        const added = await connected.storage.addColumn(boardId, {
+          name: body.name,
+          id: body.id,
+        });
+        if (!added.ok) {
+          return json({ error: added.error }, 400);
+        }
+
+        await refreshRepo(connected, { indexStore, force: true });
+        if (added.value.sha) {
+          live?.notifyWrite(added.value.sha);
+          pushQueue?.enqueue(added.value.sha);
+        }
+        return json(
+          {
+            ok: true,
+            column: added.value.column,
+            columns: added.value.board.columns,
+            sha: added.value.sha,
+            sync: pushQueue?.getState() ?? null,
+          },
+          201,
+        );
+      }
+
+      if (method === "PUT") {
+        const body = await readJson<{ order?: string[] }>(req);
+        if (!body?.order || !Array.isArray(body.order)) {
+          return badRequest("Body must include { order: string[] }");
+        }
+        await refreshRepo(connected, { indexStore });
+        const board = indexStore.getBoard(connected.remoteKey, boardId);
+        if (!board) return notFound(`Board not found: ${boardId}`);
+
+        const reordered = await connected.storage.reorderColumns(
+          boardId,
+          body.order,
+        );
+        if (!reordered.ok) {
+          return json({ error: reordered.error }, 400);
+        }
+        await refreshRepo(connected, { indexStore, force: true });
+        if (reordered.value.sha) {
+          live?.notifyWrite(reordered.value.sha);
+          pushQueue?.enqueue(reordered.value.sha);
+        }
+        return json({
+          ok: true,
+          columns: reordered.value.board.columns,
+          sha: reordered.value.sha,
+          sync: pushQueue?.getState() ?? null,
+        });
+      }
+    }
+
+    // Rename / delete one column
+    const columnItemMatch = path.match(
+      /^\/api\/boards\/([^/]+)\/columns\/([^/]+)$/,
+    );
+    if (columnItemMatch) {
+      if (!connected) return notFound("No repo connected");
+      const boardId = decodeURIComponent(columnItemMatch[1]!);
+      const columnId = decodeURIComponent(columnItemMatch[2]!);
+
+      if (method === "PATCH") {
+        const body = await readJson<{ name?: string }>(req);
+        if (!body?.name?.trim()) {
+          return badRequest("Body must include { name }");
+        }
+        await refreshRepo(connected, { indexStore });
+        const board = indexStore.getBoard(connected.remoteKey, boardId);
+        if (!board) return notFound(`Board not found: ${boardId}`);
+
+        const renamed = await connected.storage.renameColumn(
+          boardId,
+          columnId,
+          body.name,
+        );
+        if (!renamed.ok) {
+          return json({ error: renamed.error }, 400);
+        }
+        await refreshRepo(connected, { indexStore, force: true });
+        if (renamed.value.sha) {
+          live?.notifyWrite(renamed.value.sha);
+          pushQueue?.enqueue(renamed.value.sha);
+        }
+        return json({
+          ok: true,
+          column: renamed.value.column,
+          columns: renamed.value.board.columns,
+          sha: renamed.value.sha,
+          sync: pushQueue?.getState() ?? null,
+        });
+      }
+
+      if (method === "DELETE") {
+        const body = (await readJson<{ moveTo?: string }>(req)) ?? {};
+        await refreshRepo(connected, { indexStore });
+        const board = indexStore.getBoard(connected.remoteKey, boardId);
+        if (!board) return notFound(`Board not found: ${boardId}`);
+
+        const deleted = await connected.storage.deleteColumn(boardId, columnId, {
+          moveTo: body.moveTo,
+        });
+        if (!deleted.ok) {
+          return json({ error: deleted.error }, 400);
+        }
+        await refreshRepo(connected, { indexStore, force: true });
+        if (deleted.value.sha) {
+          live?.notifyWrite(deleted.value.sha);
+          pushQueue?.enqueue(deleted.value.sha);
+        }
+        return json({
+          ok: true,
+          columns: deleted.value.board.columns,
+          moved: deleted.value.moved ?? 0,
+          archived: deleted.value.archived ?? 0,
+          sha: deleted.value.sha,
+          sync: pushQueue?.getState() ?? null,
+        });
+      }
     }
 
     // Create card: POST /api/boards/:boardId/cards
@@ -728,7 +1342,11 @@ export function createHandler(options: AppOptions = {}) {
       if (!connected) return notFound("No repo connected");
       const boardId = decodeURIComponent(moveMatch[1]!);
       const cardId = decodeURIComponent(moveMatch[2]!);
-      const body = await readJson<{ column?: string; order?: string }>(req);
+      const body = await readJson<{
+        column?: string;
+        order?: string;
+        actor?: string;
+      }>(req);
       if (!body?.column) {
         return badRequest("Body must include { column, order? }");
       }
@@ -736,6 +1354,29 @@ export function createHandler(options: AppOptions = {}) {
       await refreshRepo(connected, { indexStore });
       const board = indexStore.getBoard(connected.remoteKey, boardId);
       if (!board) return notFound(`Board not found: ${boardId}`);
+
+      const moving = board.cards.find((c) => c.id === cardId);
+      const settings = (board.board.settings ?? {}) as Record<string, unknown>;
+      if (
+        isDoingColumn(body.column) &&
+        moving &&
+        !isDoingColumn(moving.column) &&
+        isHardWip(settings)
+      ) {
+        const doingN = board.cards.filter((c) => isDoingColumn(c.column)).length;
+        const wip = checkDoingWip(doingN, settings, { movingIntoDoing: true });
+        if (wip.over) {
+          return json(
+            {
+              error: "wip_hard",
+              message: wip.message ?? "Doing WIP limit reached",
+              limit: wip.limit,
+              count: wip.count,
+            },
+            409,
+          );
+        }
+      }
 
       let newOrder = body.order;
       if (!newOrder) {
@@ -753,7 +1394,7 @@ export function createHandler(options: AppOptions = {}) {
         cardId,
         body.column,
         newOrder,
-        { actor: "human" },
+        { actor: body.actor?.trim() || "human" },
       );
       if (!moved.ok) {
         return json({ error: moved.error }, moved.error.kind === "not_found" ? 404 : 500);
@@ -769,6 +1410,73 @@ export function createHandler(options: AppOptions = {}) {
         sha: moved.value.sha,
         column: body.column,
         order: newOrder,
+        sync: pushQueue?.getState() ?? null,
+      });
+    }
+
+    // Agent session-end (HTTP): POST /api/boards/:boardId/cards/:cardId/session-end
+    const sessionEndMatch = path.match(
+      /^\/api\/boards\/([^/]+)\/cards\/([^/]+)\/session-end$/,
+    );
+    if (method === "POST" && sessionEndMatch) {
+      if (!connected) return notFound("No repo connected");
+      const boardId = decodeURIComponent(sessionEndMatch[1]!);
+      const cardId = decodeURIComponent(sessionEndMatch[2]!);
+      const body = await readJson<{
+        summary?: string;
+        agent?: string;
+        status?: string;
+        sha?: string;
+        moveToDoing?: boolean;
+      }>(req);
+      if (!body?.summary?.trim()) {
+        return badRequest("Body must include { summary }");
+      }
+      await refreshRepo(connected, { indexStore });
+      const read = await connected.storage.readCard(boardId, cardId);
+      if (!read.ok) {
+        return json(
+          { error: read.error },
+          read.error.kind === "not_found" ? 404 : 500,
+        );
+      }
+      const actor = body.agent?.trim() || "agent";
+      let ended;
+      try {
+        ended = applySessionEnd({
+          card: read.value,
+          summary: body.summary.trim(),
+          actor,
+          status: body.status,
+          sha: body.sha,
+        });
+      } catch (e) {
+        return badRequest(e instanceof Error ? e.message : String(e));
+      }
+      if (
+        body.moveToDoing !== false &&
+        ended.card.frontmatter.column === "ready"
+      ) {
+        ended.card.frontmatter.column = "doing";
+      }
+      const w = await connected.storage.writeCard(boardId, ended.card, {
+        message: `chore(board): session-end ${cardId}`,
+      });
+      if (!w.ok) {
+        return json({ error: w.error }, 500);
+      }
+      await refreshRepo(connected, { indexStore, force: true });
+      if (w.value.sha) {
+        live?.notifyWrite(w.value.sha);
+        pushQueue?.enqueue(w.value.sha);
+      }
+      return json({
+        ok: true,
+        boardId,
+        cardId,
+        logLine: ended.logLine,
+        column: ended.card.frontmatter.column,
+        sha: w.value.sha,
         sync: pushQueue?.getState() ?? null,
       });
     }
@@ -798,6 +1506,243 @@ export function createHandler(options: AppOptions = {}) {
         entries: hist.value,
         count: hist.value.length,
       });
+    }
+
+    // Project (code) commits — not boards-repo log
+    // GET /api/boards/:boardId/code-history
+    const codeHistMatch = path.match(
+      /^\/api\/boards\/([^/]+)\/code-history$/,
+    );
+    if (method === "GET" && codeHistMatch) {
+      if (!connected) return notFound("No repo connected");
+      const boardId = decodeURIComponent(codeHistMatch[1]!);
+      const limitParam = url.searchParams.get("limit");
+      const limit = limitParam ? Number(limitParam) : 50;
+      const hist = connected.storage.codeHistory(boardId, {
+        limit: Number.isFinite(limit) ? limit : 50,
+      });
+      if (!hist.ok) {
+        return json(
+          { error: hist.error },
+          hist.error.kind === "not_found" ? 404 : 500,
+        );
+      }
+      const binding = hist.value.binding;
+      const remote = binding?.remote;
+      const board = indexStore.getBoard(connected.remoteKey, boardId);
+      const cardIdSet = new Set(
+        (board?.cards ?? []).map((c) => c.id.toLowerCase()),
+      );
+      const commits = hist.value.commits.map((c) => {
+        const mentioned = extractCardIdsFromText(c.subject).filter((id) =>
+          cardIdSet.has(id),
+        );
+        return {
+          ...c,
+          url: githubCommitUrl(remote, c.sha),
+          cardIds: mentioned,
+        };
+      });
+      return json({
+        boardId,
+        source: "code",
+        bound: hist.value.bound,
+        binding: hist.value.binding,
+        codePath: hist.value.codePath ?? null,
+        error: hist.value.error ?? null,
+        commits,
+        count: commits.length,
+      });
+    }
+
+    // PATCH /api/boards/:boardId/code-binding  { path?, remote?, clear? }
+    // POST  /api/boards/:boardId/code-source   { url|remote?, path?, token?, username?, credentialId? }
+    //   → clone remote into ~/.kanbanly/code-clones if needed, bind board, return history
+    const codeBindMatch = path.match(
+      /^\/api\/boards\/([^/]+)\/code-binding$/,
+    );
+    const codeSourceMatch = path.match(
+      /^\/api\/boards\/([^/]+)\/code-source$/,
+    );
+    if (
+      (method === "PATCH" && codeBindMatch) ||
+      (method === "POST" && codeSourceMatch)
+    ) {
+      if (!connected) return notFound("No repo connected");
+      const boardId = decodeURIComponent(
+        (codeBindMatch ?? codeSourceMatch)![1]!,
+      );
+      const body = await readJson<{
+        path?: string | null;
+        remote?: string | null;
+        url?: string | null;
+        clear?: boolean;
+        token?: string;
+        username?: string;
+        credentialId?: string;
+        fetch?: boolean;
+      }>(req);
+
+      if (body?.clear) {
+        const result = await connected.storage.setCodeBinding(boardId, null);
+        if (!result.ok) {
+          return json(
+            { error: result.error },
+            result.error.kind === "not_found" ? 404 : 400,
+          );
+        }
+        if (result.value.sha) {
+          live?.notifyWrite(result.value.sha);
+          pushQueue?.enqueue(result.value.sha);
+        }
+        return json({
+          ok: true,
+          boardId,
+          cleared: true,
+          settings: result.value.board.settings ?? {},
+          sha: result.value.sha,
+          sync: pushQueue?.getState() ?? null,
+        });
+      }
+
+      const remote =
+        body?.remote?.trim() || body?.url?.trim() || undefined;
+      let pathIn = body?.path?.trim() || undefined;
+
+      // Resolve credential: explicit token → book id → active boards store
+      let cred: GitCredential | null = null;
+      if (body?.token?.trim()) {
+        cred = {
+          token: body.token.trim(),
+          username: body.username?.trim() || "x-access-token",
+        };
+      } else if (body?.credentialId?.trim()) {
+        cred = credentialBook.get(body.credentialId.trim());
+      } else if (credentials?.has()) {
+        cred = credentials.get();
+      }
+
+      let ensured: {
+        path: string;
+        remote: string | null;
+        cloned: boolean;
+        fetched: boolean;
+      } | null = null;
+      try {
+        if (pathIn || remote) {
+          ensured = ensureCodeRepo({
+            path: pathIn,
+            remote,
+            credential: cred,
+            fetch: body?.fetch !== false && !!remote,
+          });
+          pathIn = ensured.path;
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return json({ error: msg }, 400);
+      }
+
+      if (!pathIn && !remote) {
+        return badRequest(
+          "Provide path and/or remote (url) to bind a source code repo",
+        );
+      }
+
+      const result = await connected.storage.setCodeBinding(boardId, {
+        path: pathIn,
+        remote: remote || ensured?.remote || undefined,
+      });
+      if (!result.ok) {
+        return json(
+          { error: result.error },
+          result.error.kind === "not_found" ? 404 : 400,
+        );
+      }
+      await refreshRepo(connected, { indexStore, force: true });
+      if (result.value.sha) {
+        live?.notifyWrite(result.value.sha);
+        pushQueue?.enqueue(result.value.sha);
+      }
+
+      const hist = connected.storage.codeHistory(boardId, { limit: 30 });
+      return json({
+        ok: true,
+        boardId,
+        settings: result.value.board.settings ?? {},
+        sha: result.value.sha,
+        source: ensured
+          ? {
+              path: ensured.path,
+              remote: ensured.remote,
+              cloned: ensured.cloned,
+              fetched: ensured.fetched,
+            }
+          : null,
+        history: hist.ok
+          ? {
+              bound: hist.value.bound,
+              commits: hist.value.commits,
+              count: hist.value.commits.length,
+              error: hist.value.error ?? null,
+              codePath: hist.value.codePath ?? null,
+            }
+          : null,
+        sync: pushQueue?.getState() ?? null,
+      });
+    }
+
+    // Project notes: GET/PUT /api/boards/:boardId/notes
+    const notesMatch = path.match(/^\/api\/boards\/([^/]+)\/notes$/);
+    if (notesMatch) {
+      if (!connected) return notFound("No repo connected");
+      const boardId = decodeURIComponent(notesMatch[1]!);
+      if (method === "GET") {
+        const n = connected.storage.readNotes(boardId);
+        if (!n.ok) {
+          return json(
+            { error: n.error },
+            n.error.kind === "not_found" ? 404 : 500,
+          );
+        }
+        return json({
+          boardId,
+          body: n.value.body,
+          path: n.value.path,
+          exists: n.value.exists,
+        });
+      }
+      if (method === "PUT") {
+        const body = await readJson<{ body?: string }>(req);
+        if (typeof body?.body !== "string") {
+          return badRequest("Body must include { body: string }");
+        }
+        const board = indexStore.getBoard(connected.remoteKey, boardId);
+        const title =
+          board?.board.title?.trim() ||
+          board?.id ||
+          boardId;
+        const w = await connected.storage.writeNotes(boardId, body.body, {
+          title,
+        });
+        if (!w.ok) {
+          return json(
+            { error: w.error },
+            w.error.kind === "not_found" ? 404 : 500,
+          );
+        }
+        if (w.value.sha) {
+          live?.notifyWrite(w.value.sha);
+          pushQueue?.enqueue(w.value.sha);
+        }
+        return json({
+          ok: true,
+          boardId,
+          path: w.value.path,
+          sha: w.value.sha,
+          sync: pushQueue?.getState() ?? null,
+        });
+      }
     }
 
     // Update card: PATCH /api/boards/:boardId/cards/:cardId
