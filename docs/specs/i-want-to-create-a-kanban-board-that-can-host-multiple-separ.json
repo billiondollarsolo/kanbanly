@@ -1,0 +1,299 @@
+{
+  "name": "kanbanly",
+  "slug": "i-want-to-create-a-kanban-board-that-can-host-multiple-separ",
+  "date": "2026-08-04",
+  "status": "ready-for-implementation",
+  "overview": "Self-hosted, multi-project kanban board whose data lives in git repositories as markdown files. Coding agents create cards, move them, and write human-readable status narratives as they work. A hosted SaaS offers the same product managed, with S3 storage, an AI assistant, and one-click export back to git.",
+  "problemStatement": "Coding agents do substantial work but leave no durable, human-legible record of what they did, what they're doing, or what they discovered. Existing trackers are SaaS-only, API-driven, and hostile to agents that are good at editing files and running git. kanbanly makes the tracker a git repo of markdown.",
+  "corePrinciple": "Git is the only contract. The UI and the coding agent are independent clients of the same remote — no API between them, no auth between them, neither needs to know the other exists.",
+  "scope": {
+    "inScope": [
+      "Card format: markdown + YAML frontmatter, ## Status / ## Log conventions",
+      "Boards stored in dedicated git repo(s), addressed as (remote, path)",
+      "Two layouts: one boards repo with directory per board, or one repo per board",
+      ".kanbanly.yml pointer committed in the code repo",
+      "@kanbanly/core shared package: Zod schema, ID/order rules, merge driver, storage adapters",
+      "Custom git merge driver with designed conflict-marker fallback",
+      "OSS server: connect boards repo, render, drag-and-drop, card edit, quick-add, archive",
+      "Multi-board and multi-boards-repo",
+      "Poll + SSE live updates",
+      "Optimistic UI -> local commit -> background push queue",
+      "pr:-linked pending-work overlay",
+      "Installable setup skill + in-repo AGENTS.md conventions",
+      "Filter bar, keyboard navigation, board activity feed",
+      "Light/dark theme with explicit switch",
+      "Five explicit error states"
+    ],
+    "outOfScope": [
+      "Real-time multiplayer presence, cursors, CRDT co-editing",
+      "AI assistant in OSS (SaaS-only)",
+      "WIP limits",
+      "Standalone compiled binary (Docker + npm only)",
+      "Enterprise self-deploy of the SaaS stack"
+    ],
+    "postMvpRoadmap": [
+      "Import from Trello / Jira / Linear",
+      "Public read-only share links",
+      "Outbound webhooks / events API",
+      "Audit log",
+      "One-way GitHub Issues import; two-way Issues sync"
+    ]
+  },
+  "technicalDesign": {
+    "stack": {
+      "language": "TypeScript",
+      "runtime": "Bun (npm package must stay Node-compatible best-effort for npx users)",
+      "frontend": "TanStack Start (full-stack) + Router + Query + Table + Form",
+      "dragAndDrop": "@atlaskit/pragmatic-drag-and-drop (+ /auto-scroll, /hitbox)",
+      "ai": "TanStack AI (@tanstack/ai, @tanstack/ai-anthropic, @tanstack/ai-react), model claude-opus-5, SaaS-only",
+      "distribution": "Docker + npm only; no standalone binary",
+      "requires": "git in $PATH (server shells out to real git CLI)"
+    },
+    "monorepo": {
+      "public": {
+        "license": "AGPL-3.0 + contributor CLA",
+        "packages": {
+          "packages/core": "@kanbanly/core — card schema (zod), id + order-key rules, merge driver, storage adapters (git | s3), ai tool definitions",
+          "packages/server": "OSS app entry",
+          "apps/web": "TanStack Start full-stack",
+          "deploy": "compose.yaml + Helm chart"
+        }
+      },
+      "closed": {
+        "repo": "kanbanly-saas",
+        "dependency": "@kanbanly/core under private grant",
+        "adds": "tenants, auth, billing, AI service, portfolio view"
+      }
+    },
+    "cardFormat": {
+      "file": "cards/<id>-<title-slug>.md",
+      "frontmatter": ["id", "title", "column", "order", "priority", "labels", "assignee", "due", "pr", "updated"],
+      "requiredFields": ["id", "title", "column", "order", "updated"],
+      "body": {
+        "## Status": "overwritten on every state change — the now",
+        "## Log": "append-only, dated and attributed — union-merges"
+      }
+    },
+    "identity": {
+      "idFormat": "c- + 4-6 random base36 chars",
+      "scope": "unique per board",
+      "collisionHandling": "scan board's cards/ directory, retry"
+    },
+    "ordering": {
+      "type": "fractional index string",
+      "agentRule": "read target column, take largest order, mint after it — never insert between",
+      "humanRule": "drag anywhere, mint between neighbours",
+      "tiebreak": "card id, lower first"
+    },
+    "writePaths": {
+      "ossServer": "own clone at ~/.kanbanly/repos/<hash>/",
+      "ossAgent": "own clone at ~/.cache/kanbanly/<hash>/",
+      "saasAgent": "authenticated HTTPS API, no clone",
+      "humanUI": "server writes on their behalf, always to default branch",
+      "note": "separate clones synced through the remote; ~15s worst-case propagation accepted"
+    },
+    "credentials": {
+      "agent": "developer's existing SSH agent or git credential helper — zero kanbanly-specific setup",
+      "server": "~/.kanbanly/creds.age (0600) encrypted with ~/.kanbanly/key (0600), or mounted SSH key"
+    },
+    "conflictResolution": {
+      "pushRetry": "git pull --rebase then re-push, up to 3 attempts",
+      "gitattributes": "**/cards/*.md merge=kanbanly",
+      "driverCommand": "kanbanly merge-driver %O %A %B %L %P",
+      "installation": "per-clone via git config — git does not let a repo define what a driver executes",
+      "fallback": "clone without driver produces conflict markers; server detects on fetch, heals with same logic, commits",
+      "rules": {
+        "frontmatter": "higher updated wins",
+        "logSection": "union, dedupe, re-sort by date",
+        "statusSection": "higher updated wins"
+      },
+      "hazard": "plain merge=union on YAML frontmatter produces duplicate keys silently resolved to the last value — silent data loss"
+    },
+    "serverState": {
+      "database": "none",
+      "files": "~/.kanbanly/: config.json, creds.age, key, queue.json, repos/<hash>/",
+      "index": "in-memory index[remote] = { sha, boards, cards }, rebuilt only on SHA change"
+    },
+    "saas": {
+      "cardStorage": "S3, one object per card, git-identical format, ETag If-Match compare-and-swap, bucket versioning on",
+      "relationalStorage": "Postgres — tenants, users, auth, billing, chat history, audit log",
+      "mergeDriver": "unnecessary in SaaS — conditional writes replace it",
+      "auth": "device-code login; credential never passes through the agent or transcript",
+      "aiTools": {
+        "read": ["list_cards", "get_card", "board_summary", "search_cards", "card_history"],
+        "write": ["create_card", "move_card", "update_status", "add_label"],
+        "writePolicy": "all writes require an in-chat confirm chip before committing"
+      },
+      "export": "one-click push to my GitHub materializes S3 into a real git repo, plus downloadable .bundle",
+      "deployment": "Helm chart + Compose file, operated by us; Postgres via CloudNativePG in-cluster or external URL",
+      "pricing": "deferred"
+    }
+  },
+  "userExperience": {
+    "visualDirection": "Clean, calm product identity — no mascot. Muted palette, strong typography, generous whitespace.",
+    "theme": "Light / Dark / System switch, persisted per browser, defaults to system preference. Both themes first-class, WCAG AA.",
+    "urls": {
+      "board": "/r/<remote-slug>/b/<board>",
+      "card": "/r/<remote-slug>/b/<board>/<cardid>"
+    },
+    "errorStates": [
+      "Credential invalid/expired/missing scopes -> banner naming the missing scope + re-enter flow",
+      "Offline / remote unreachable -> local commits work, pushes queue, 'offline — N changes pending', drains on reconnect",
+      "Malformed frontmatter -> quarantine lane with parse error; board still renders",
+      "Unknown column id -> quarantine lane with one-click 'move all to ->' picker; nothing auto-moves",
+      "Unresolvable conflict after 3 attempts -> freeze sync, show both sides, keep-mine / keep-theirs"
+    ],
+    "securityPosture": {
+      "authentication": "none in OSS, by explicit decision",
+      "bindDefault": "127.0.0.1",
+      "hostOverride": "--host prints a loud warning that anyone reachable can push to connected repos",
+      "acceptedRisk": "an exposed no-auth instance hands push access to anyone on the network",
+      "telemetry": "none by default; optional check_updates hits GitHub releases API only"
+    }
+  },
+  "requirements": {
+    "functional": [
+      { "id": "FR-1", "text": "Parse and serialize a card file: YAML frontmatter + ## Status + ## Log sections" },
+      { "id": "FR-2", "text": "Validate card frontmatter against a Zod schema; surface parse errors without crashing the board render" },
+      { "id": "FR-3", "text": "Generate collision-free card IDs by scanning the target board's cards/" },
+      { "id": "FR-4", "text": "Mint fractional order keys: append-after-last, insert-between, tiebreak on id" },
+      { "id": "FR-5", "text": "Parse board.yml: columns (id + display name), labels, settings" },
+      { "id": "FR-6", "text": "Merge driver resolving frontmatter by updated timestamp and union-merging Log" },
+      { "id": "FR-7", "text": "Detect and heal conflict-markered card files on fetch" },
+      { "id": "FR-8", "text": "Git storage adapter: clone, read board, write card, commit, push, rebase-and-retry" },
+      { "id": "FR-9", "text": "kanbanly setup scaffolds a boards repo, writes .kanbanly.yml, pointer lines, .gitattributes, merge-driver git config" },
+      { "id": "FR-10", "text": "kanbanly skill install detects harness skill directories and installs the skill" },
+      { "id": "FR-11", "text": "Connect a boards repo by URL with an optional credential; clone and render" },
+      { "id": "FR-12", "text": "Render a board: columns from board.yml, cards sorted by order" },
+      { "id": "FR-13", "text": "Maintain an in-memory index keyed by commit SHA; rebuild only on SHA change" },
+      { "id": "FR-14", "text": "Poll git fetch on a configurable interval; push changes to browsers via SSE" },
+      { "id": "FR-15", "text": "Drag a card between and within columns; mint the new order key; commit" },
+      { "id": "FR-16", "text": "Queue pushes with a ~2s debounce; surface sync state in the header" },
+      { "id": "FR-17", "text": "Create a card from the board with a title only" },
+      { "id": "FR-18", "text": "Edit card frontmatter fields and ## Status from the detail panel" },
+      { "id": "FR-19", "text": "Archive done cards into cards/archive/ via git mv" },
+      { "id": "FR-20", "text": "Render pr:-linked pending state on cards from forge PR metadata" },
+      { "id": "FR-21", "text": "Filter by label, assignee, and free-text search" },
+      { "id": "FR-22", "text": "Navigate and move cards by keyboard" },
+      { "id": "FR-23", "text": "Show a board-level activity feed rolling up every card's Log" },
+      { "id": "FR-24", "text": "Toggle light / dark / system theme; persist per browser" },
+      { "id": "FR-25", "text": "Handle all five error states" }
+    ],
+    "nonFunctional": [
+      { "id": "NFR-1", "text": "2,000 cards per boards repo without degradation" },
+      { "id": "NFR-2", "text": "Full re-index in under 500ms on SHA change" },
+      { "id": "NFR-3", "text": "Board render in under 100ms from the in-memory index" },
+      { "id": "NFR-4", "text": "Fetch returning an unchanged SHA performs no parsing work" },
+      { "id": "NFR-5", "text": "Server binds 127.0.0.1 unless explicitly overridden" },
+      { "id": "NFR-6", "text": "Credentials stored encrypted at rest with 0600 permissions" },
+      { "id": "NFR-7", "text": "No telemetry or outbound network calls except the configured git remote and optionally the GitHub releases API" },
+      { "id": "NFR-8", "text": "Both light and dark themes meet WCAG AA contrast" },
+      { "id": "NFR-9", "text": "The npm package runs under Node as well as Bun (best-effort)" }
+    ]
+  },
+  "userStories": [
+    { "id": "US-1", "phase": 1, "title": "Card schema and parser", "criteria": ["parseCard(text) returns { frontmatter, status, log } for a valid card", "Frontmatter validates against a Zod schema; id, title, column, order, updated required", "serializeCard round-trips: parseCard(serializeCard(c)) deep-equals c", "Invalid YAML returns a typed parse error, never throws", "Missing ## Status or ## Log sections parse as empty, not errors", "bun test passes; bun run typecheck passes"] },
+    { "id": "US-2", "phase": 1, "title": "Card ID generation", "criteria": ["generateCardId(existingIds) returns c- + 4-6 base36 chars not in existingIds", "Retries on collision; test with a seeded generator forcing 3 collisions", "cardFilename(id, title) returns <id>-<slugified-title>.md", "Slugification handles unicode, punctuation, and >80-char titles", "bun test passes"] },
+    { "id": "US-3", "phase": 1, "title": "Fractional order keys", "criteria": ["orderAfter(last) returns a key sorting after last", "orderBetween(a, b) returns a key sorting strictly between them", "orderBetween(null, first) returns a key sorting before first", "1,000 sequential orderBetween inserts at the same position stay correctly ordered", "Identical keys tiebreak on card id, lower first", "bun test passes"] },
+    { "id": "US-4", "phase": 1, "title": "board.yml schema and parser", "criteria": ["parseBoard(text) returns columns (id + name, ordered), labels, settings", "Duplicate column ids return a validation error", "A card referencing an unknown column id is flagged, not dropped", "bun test passes"] },
+    { "id": "US-5", "phase": 1, "title": "Merge driver", "criteria": ["mergeCards(base, ours, theirs) resolves frontmatter keys by higher updated", "## Log entries union, dedupe, and re-sort by date", "## Status resolves by higher updated", "Fixture table covers: both moved column, both appended Log, one renamed title, one archived", "Output is never duplicate-keyed YAML — explicit test asserting a single column: key", "bun test passes"] },
+    { "id": "US-6", "phase": 1, "title": "Conflict-marker healing", "criteria": ["healConflict(text) detects <<<<<<< / ======= / >>>>>>> in a card file", "Extracts both sides and resolves them with the same mergeCards logic", "Returns unchanged text when no markers are present", "Test drives a real conflict in a temp repo with the driver not installed", "bun test passes"] },
+    { "id": "US-7", "phase": 1, "title": "Git storage adapter", "criteria": ["GitStorage implements listBoards, readBoard, readCard, writeCard, moveCard", "writeCard writes, commits with a chore(board): message, returns the new SHA", "push() retries pull --rebase up to 3 times on non-fast-forward", "After 3 failures returns a typed conflict error naming the diverged files", "All tests run against real repos created by git init in a temp dir — git is not mocked", "bun test passes"] },
+    { "id": "US-8", "phase": 1, "title": "kanbanly setup", "criteria": ["Writes .kanbanly.yml with remote and (layout A) board", "Appends a pointer line to root AGENTS.md and CLAUDE.md, creating them if absent", "Appending twice does not duplicate the line", "Writes .gitattributes with **/cards/*.md merge=kanbanly", "Runs git config merge.kanbanly.driver in the boards clone", "Scaffolds a starter board.yml and empty cards/ when the repo is new", "bun test passes"] },
+    { "id": "US-9", "phase": 1, "title": "Boards-repo AGENTS.md content", "criteria": ["Documents the card schema with a complete worked example", "States the ID generation procedure as executable steps", "States the order rule: read column, take max order, mint after — never insert between", "Gives before/after examples of a good Status rewrite and a good Log append", "Documents column transitions (Doing on start, Review on PR, Done on finish)", "Documents the re-read-before-write rule for shared checkouts", "Skill conformance test: a real agent produces schema-valid cards from this file alone"] },
+    { "id": "US-10", "phase": 1, "title": "kanbanly skill install", "criteria": ["Detects ~/.claude/skills/, ~/.codex/skills/, and other known harness dirs", "Writes the bundled skill to each found directory; skips and reports missing ones", "--path flag targets an arbitrary directory", "Re-running overwrites cleanly and is idempotent", "bun test passes"] },
+    { "id": "US-11", "phase": 2, "title": "Connect wizard", "criteria": ["Empty state prompts for a boards repo URL", "Credential is optional; SSH-agent and PAT paths both work", "Successful clone renders the board; failure shows a specific error, not a stack trace", "A repo with no board.yml offers to scaffold a starter board", "Verified in a browser against a real remote"] },
+    { "id": "US-12", "phase": 2, "title": "Board render", "criteria": ["Columns render from board.yml in defined order with per-column counts", "Cards render sorted by order, tiebroken by id", "Card shows title, labels, assignee, due date", "Empty column renders an empty state, not a collapsed div", "bun run typecheck, bun run lint, bun run build all pass"] },
+    { "id": "US-13", "phase": 2, "title": "SHA-keyed in-memory index", "criteria": ["Index stores { sha, boards, cards } per connected remote", "A fetch returning an unchanged SHA performs zero parsing (assert via parse-call counter)", "A new SHA triggers a full re-parse of that remote only", "Benchmark: 2,000 cards re-index in under 500ms", "Benchmark: board render from index in under 100ms"] },
+    { "id": "US-14", "phase": 2, "title": "Poll + SSE live updates", "criteria": ["Server fetches on a configurable interval, default 15s", "A SHA change pushes an update over SSE to all connected browsers", "The board updates without a full page reload", "Disconnect and reconnect resumes updates", "Verified end-to-end: push from a second clone, observe the board move"] },
+    { "id": "US-15", "phase": 2, "title": "Navigation and URLs", "criteria": ["Sidebar lists connected boards repos, expanding to their boards", "/r/<remote-slug>/b/<board> deep-links to a board", "/r/<remote-slug>/b/<board>/<cardid> deep-links to a card with the panel open", "Browser back/forward work correctly", "An unknown board or card id renders a not-found state"] },
+    { "id": "US-16", "phase": 2, "title": "Card detail panel (read)", "criteria": ["Clicking a card opens a side panel; the board stays visible", "Panel shows title, labels, assignee, due date, ## Status, and ## Log", "Markdown in Status and Log renders (lists, code, links)", "Escape and a close button both dismiss the panel"] },
+    { "id": "US-17", "phase": 3, "title": "Drag and drop", "criteria": ["Dragging between columns updates column and mints a new order", "Dragging within a column mints an order between the neighbours", "A drop indicator shows the landing position", "Auto-scroll works when dragging near a column edge", "Playwright test performs a real drag and asserts the card lands in the target column", "bun run test:e2e passes"] },
+    { "id": "US-18", "phase": 3, "title": "Move-card server function", "criteria": ["Server function writes the card file and commits", "updated is set to the commit time", "A Log line is appended attributing the move to the human", "The optimistic UI update reconciles with the server response", "Playwright test asserts the commit exists in the repo after the drag"] },
+    { "id": "US-19", "phase": 3, "title": "Background push queue", "criteria": ["Card settles in the UI at 0ms (optimistic)", "Local commit completes before the server function returns", "Pushes queue with a ~2s debounce; rapid drags coalesce into fewer pushes", "Header shows syncing / synced / push failed states", "Retry from the banner re-attempts the push", "Queue persists to queue.json and survives a server restart"] },
+    { "id": "US-20", "phase": 3, "title": "Quick-add card", "criteria": ["+ Add card on each column accepts a title and commits on Enter", "Created card has a generated id, correct column, order after the last, and ## Status: _Not started._", "A Log line attributes creation to the human with today's date", "Escape cancels without creating anything", "The new card appears in the column immediately"] },
+    { "id": "US-21", "phase": 3, "title": "Card detail editing", "criteria": ["Labels, assignee, and due date render as form controls that write frontmatter", "## Status is editable inline and overwrites on save", "## Log is read-only in the UI", "Each save commits once and bumps updated", "Concurrent edit from another clone resolves through the merge driver without data loss"] },
+    { "id": "US-22", "phase": 3, "title": "Archive done cards", "criteria": ["Done column renders the 20 most recent cards", "[ Archive N older cards ] appears when more than 20 exist", "Archiving git mv's files into cards/archive/ in a single commit", "Archived cards are excluded from the index and the board", "git log --follow on an archived card shows its full history"] },
+    { "id": "US-23", "phase": 4, "title": "Credential error handling", "criteria": ["An invalid or expired credential shows a banner naming the problem", "A missing scope names the specific scope required", "The banner offers a re-enter flow that retries the failed operation", "Test drives a real 401 and a real 403 from the remote"] },
+    { "id": "US-24", "phase": 4, "title": "Offline queue", "criteria": ["With the remote unreachable, drags and edits still commit locally", "Header shows offline — N changes pending", "The queue drains automatically on reconnect", "Test kills network mid-drag and asserts no data loss"] },
+    { "id": "US-25", "phase": 4, "title": "Malformed frontmatter quarantine", "criteria": ["A card with broken YAML renders in a quarantine lane showing the parse error", "The rest of the board renders normally", "The broken card's file path is shown so the user can fix it", "Fixing the file and pushing removes it from quarantine on the next fetch"] },
+    { "id": "US-26", "phase": 4, "title": "Unknown column remap", "criteria": ["Cards referencing an absent column id render in a Unknown column lane", "A move all to -> picker lists real columns", "Confirming rewrites all affected cards in one commit", "Nothing moves without explicit confirmation"] },
+    { "id": "US-27", "phase": 4, "title": "Conflict resolution UI", "criteria": ["After 3 failed rebase-and-push attempts, that repo's sync freezes", "Diverged cards are listed with both sides shown", "Keep-mine / keep-theirs resolves and resumes syncing", "Test drives a genuine unresolvable conflict between two clones"] },
+    { "id": "US-28", "phase": 4, "title": "PR overlay", "criteria": ["A card with pr: shows the PR number and state", "An open PR renders the pending target column", "A merged PR clears the pending marker on the next fetch", "Missing GitHub credentials hide the overlay rather than erroring", "PR state is polled, not fetched per render"] },
+    { "id": "US-29", "phase": 4, "title": "Filter bar", "criteria": ["Filter by label, assignee, and free-text across title and Status", "Filters combine (AND across types, OR within a type)", "Filtering runs client-side against the in-memory index — no refetch", "Column counts reflect the filtered set", "Clearing filters restores the full board"] },
+    { "id": "US-30", "phase": 4, "title": "Keyboard navigation", "criteria": ["Arrow keys move focus between cards and columns", "Enter opens the focused card", "A documented shortcut moves the focused card between columns", "All interactive elements are reachable by Tab with a visible focus ring", "Verified with a screen reader for card and column announcements"] },
+    { "id": "US-31", "phase": 4, "title": "Board activity feed", "criteria": ["Reverse-chronological roll-up of every card's ## Log", "Each entry links to its card", "Entries show date, author, and text", "Feed is derived from the existing index — no extra parsing pass"] },
+    { "id": "US-32", "phase": 4, "title": "Theme switch", "criteria": ["A switch offers Light / Dark / System", "System follows prefers-color-scheme and updates live when the OS changes", "The choice persists across reloads", "No flash of the wrong theme on load", "Both themes meet WCAG AA contrast on cards, labels, and the quarantine lane"] }
+  ],
+  "phases": [
+    {
+      "number": 1,
+      "name": "Format & Skill",
+      "stories": ["US-1", "US-2", "US-3", "US-4", "US-5", "US-6", "US-7", "US-8", "US-9", "US-10"],
+      "rationale": "The file format is the contract everything depends on and can be fully specified and tested with zero server code.",
+      "verification": ["bun test", "bun run typecheck", "bun run lint", "bun test:conformance"]
+    },
+    {
+      "number": 2,
+      "name": "Read",
+      "stories": ["US-11", "US-12", "US-13", "US-14", "US-15", "US-16"],
+      "verification": ["bun test", "bun run typecheck", "bun run lint", "bun run build", "bun test:bench"]
+    },
+    {
+      "number": 3,
+      "name": "Write",
+      "stories": ["US-17", "US-18", "US-19", "US-20", "US-21", "US-22"],
+      "verification": ["bun test", "bun run test:e2e", "bun run typecheck", "bun run lint", "bun run build"]
+    },
+    {
+      "number": 4,
+      "name": "Harden & Overlay",
+      "stories": ["US-23", "US-24", "US-25", "US-26", "US-27", "US-28", "US-29", "US-30", "US-31", "US-32"],
+      "verification": ["bun test", "bun run test:e2e", "bun run typecheck", "bun run lint", "bun run build"]
+    }
+  ],
+  "verification": {
+    "test": "bun test",
+    "e2e": "bun run test:e2e",
+    "typecheck": "bun run typecheck",
+    "lint": "bun run lint",
+    "build": "bun run build",
+    "bench": "bun test:bench",
+    "conformance": "bun test:conformance"
+  },
+  "verificationLayers": [
+    "Tests against real temp git repos — git init in a temp dir, drive real conflicts. Git is not mocked.",
+    "Merge-driver conflict fixtures — two-sided card edits with expected merged output. Guards the duplicate-YAML-key hazard.",
+    "Playwright end-to-end drag test — real browser drag, assert card lands AND commit exists.",
+    "Skill conformance test — real agent against a fixture boards repo, assert schema-valid cards with correct IDs and order keys."
+  ],
+  "openConcerns": [
+    "The frontmatter merge driver is the highest-risk component. Plain merge=union on YAML produces duplicate keys that parsers silently resolve to the last one — silent data loss. Write the fixture table before the driver.",
+    "Git's merge-driver security model means .gitattributes alone is not enough. The driver command must be installed per-clone via git config. The conflict-healing fallback is not optional.",
+    "Pragmatic drag-and-drop uses native HTML5 drag events, notoriously fiddly to drive in Playwright. Pin the e2e drag test down early.",
+    "Bun is the runtime but npx users land on Node. Both need testing per release.",
+    "OSS has no authentication by explicit decision. The 127.0.0.1 default and the --host warning are the only mitigations; do not weaken either.",
+    "Agents sharing a checkout can race on a card file. Documented as a known limit with a re-read-before-write convention.",
+    "@kanbanly/core is the AGPL boundary. Anything the closed SaaS repo needs must live there; anything SaaS-specific must not leak into it."
+  ],
+  "decisionLog": [
+    { "was": "Board content at .kanbanly/ inside the code repo", "now": "Boards in their own repo(s); code repo holds .kanbanly.yml", "why": "User redirect" },
+    { "was": "Card changes ride the feature branch, land on merge", "now": "Boards live on their default branch", "why": "Follows from boards decoupling" },
+    { "was": "Card status visible in the PR diff", "now": "Gone", "why": "Follows from boards decoupling" },
+    { "was": "Ghost overlay computed by git diff main..branch", "now": "Overlay from a declared pr: link + forge API", "why": "No branch copies to diff" },
+    { "was": "Conventions in .kanbunny/AGENTS.md per code repo", "now": "One AGENTS.md at the boards repo root", "why": "DRY" },
+    { "was": "First run pastes a GitHub PAT and picks a repo", "now": "First run takes a boards repo URL; credentials optional", "why": "Any git remote works" },
+    { "was": "SaaS clones customer repos", "now": "SaaS stores boards in S3 with ETag CAS", "why": "User redirect" },
+    { "was": "Single Go binary shelling out to git", "now": "All TypeScript on Bun", "why": "Go's only benefit was the binary" },
+    { "was": "TanStack Start in SPA mode", "now": "Full-stack Start with server functions", "why": "Node owns the API now" },
+    { "was": "npm wrapper package around a Go binary", "now": "Native npm package", "why": "No binary to wrap" },
+    { "was": "GoReleaser, cross-compiled binaries, checksums", "now": "Docker + npm only", "why": "User: only docker/npm in oss" },
+    { "was": "bun build --compile standalone binary", "now": "Dropped", "why": "User: only docker/npm in oss" },
+    { "was": "Closed repo consuming a Go core library", "now": "Closed repo importing @kanbanly/core from npm", "why": "Same boundary, less friction" },
+    { "was": "SaaS = two services (Go core + Node AI)", "now": "One TypeScript app", "why": "No language boundary" },
+    { "was": "Priority-only card sort", "now": "Fractional-index drag-and-drop", "why": "User: drag and drop like real kanban" },
+    { "was": "AI assistant available in OSS with BYO key", "now": "SaaS-only", "why": "User decision" },
+    { "was": "Playful bunny mascot", "now": "Clean, calm identity, no mascot", "why": "Rename to kanbanly" },
+    { "was": "Named kanbunny", "now": "Named kanbanly", "why": "User rename" }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "name": "kanbanly",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "bin": {
+    "kanbanly": "./bin/kanbanly"
+  },
+  "scripts": {
+    "test": "bun test packages/core packages/server",
+    "test:core": "bun test packages/core",
+    "test:server": "bun test packages/server",
+    "test:board-ui": "bun test packages/core/tests/drop-order.test.ts packages/server/tests/drop-move.test.ts packages/server/tests/pragmatic-wiring.test.ts packages/server/tests/server-http.test.ts",
+    "test:e2e": "bun run scripts/test-e2e.mjs",
+    "test:node": "bun run scripts/test-node.mjs",
+    "test:conformance": "bun test packages/core/tests/contrast-skill.test.ts packages/core/tests/heal.test.ts packages/core/tests/merge.test.ts packages/core/tests/setup.test.ts",
+    "test:closeout": "bun run typecheck && bun run lint && bun test packages/core packages/server && bun run test:conformance && bun run test:e2e && bun run test:node && bun run build",
+    "typecheck": "tsc -p packages/core --noEmit && tsc -p packages/server --noEmit",
+    "lint": "bun run scripts/lint.mjs",
+    "build": "bun run --filter @kanbanly/web build",
+    "build:web": "bun run --filter @kanbanly/web build",
+    "build:start": "bun run --filter @kanbanly/start build",
+    "dev:start": "bun run --filter @kanbanly/start dev",
+    "test:start": "bun test apps/start",
+    "kanbanly": "bun run packages/server/src/cli.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "fractional-indexing": "^4.0.0",
+    "typescript": "^5.8.2"
+  }
+}

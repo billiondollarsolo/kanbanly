@@ -1,0 +1,23 @@
+{
+  "name": "@kanbanly/web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run ../../packages/server/src/cli.ts serve",
+    "build": "bun build ./src/main.tsx --outdir ../../packages/server/public --minify --target browser --format esm",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@atlaskit/pragmatic-drag-and-drop": "^2.0.1",
+    "@atlaskit/pragmatic-drag-and-drop-hitbox": "^2.0.0",
+    "@kanbanly/core": "workspace:*",
+    "@kanbanly/server": "workspace:*",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4"
+  }
+}

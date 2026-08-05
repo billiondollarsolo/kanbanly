@@ -1,0 +1,11 @@
+columns:
+  - id: backlog
+    name: Backlog
+  - id: doing
+    name: Doing
+  - id: review
+    name: Review
+  - id: done
+    name: Done
+labels: []
+settings: {}

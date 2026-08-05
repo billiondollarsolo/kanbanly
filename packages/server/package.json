@@ -1,0 +1,23 @@
+{
+  "name": "@kanbanly/server",
+  "version": "1.0.0",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "main": "./src/index.ts",
+  "bin": {
+    "kanbanly": "./src/cli.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit",
+    "start": "bun run src/cli.ts serve"
+  },
+  "dependencies": {
+    "@kanbanly/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.8.2"
+  }
+}

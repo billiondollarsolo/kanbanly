@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Cross-runtime entry: prefer Bun, fall back to Node (NFR-9).
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CLI="$ROOT/packages/server/src/cli.ts"
+
+if command -v bun >/dev/null 2>&1; then
+  exec bun run "$CLI" "$@"
+fi
+
+if command -v node >/dev/null 2>&1; then
+  # Node 22+ can run TypeScript with --experimental-strip-types
+  if node --experimental-strip-types -e "0" 2>/dev/null; then
+    exec node --experimental-strip-types --no-warnings "$CLI" "$@"
+  fi
+  echo "kanbanly: Node found but cannot load TypeScript." >&2
+  echo "Install Bun (https://bun.sh) or use Node 22+ with --experimental-strip-types." >&2
+  exit 1
+fi
+
+echo "kanbanly: neither bun nor node found on PATH." >&2
+exit 1

@@ -1,0 +1,37 @@
+# dependencies
+node_modules/
+**/node_modules/
+
+# build / caches
+dist/
+dist-ssr/
+.output/
+.nitro/
+.tanstack/
+.vinxi/
+.wrangler/
+*.local
+__unconfig*
+todos.json
+
+# env & secrets
+.env
+.env.*
+!.env.example
+**/.kanbanly/
+**/.kanbanly-saas-s3/
+**/.credential-key
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+*.log
+
+# Closed SaaS product lives in private repo billiondollarsolo/kanbanly-saas
+kanbanly-saas/
+
+# test / coverage
+coverage/
+*.lcov

@@ -1,0 +1,72 @@
+kanbanly — Implementation Progress
+Spec: docs/specs/i-want-to-create-a-kanban-board-that-can-host-multiple-separ.md
+Updated: 2026-08-04 (implementation complete for MVP mechanics)
+
+Legend: [PENDING] [IN PROGRESS] [DONE] [BLOCKED]
+
+================================================================================
+PHASE 1 — FORMAT & SKILL  (@kanbanly/core, no server)
+================================================================================
+[DONE] US-1   Card schema and parser (Zod, frontmatter + Status + Log)
+[DONE] US-2   Card ID generation (c- + base36, collision retry, filename slug)
+[DONE] US-3   Fractional order keys (after, between, tiebreak on id)
+[DONE] US-4   board.yml schema and parser (columns, labels, settings)
+[DONE] US-5   Merge driver (frontmatter by updated, Log union, Status by updated)
+[DONE] US-6   Conflict-marker healing (fallback for clones without the driver)
+[DONE] US-7   Git storage adapter (clone/read/write/commit/push/rebase-retry)
+[DONE] US-8   kanbanly setup (.kanbanly.yml, pointers, gitattributes, git config)
+[DONE] US-9   Boards-repo AGENTS.md content + skill conformance tests
+[DONE] US-10  kanbanly skill install
+
+Verification: bun test · bun run typecheck · bun run test:conformance
+
+================================================================================
+PHASE 2 — READ
+================================================================================
+[DONE] US-11  Connect wizard (URL + optional credential, clone, scaffold)
+[DONE] US-12  Board render (columns, sorted cards, counts, empty states)
+[DONE] US-13  SHA-keyed in-memory index (zero work on unchanged SHA; 2k bench)
+[DONE] US-14  Poll + SSE live updates (15s default; pull API; second-clone tests)
+[DONE] US-15  Navigation and URLs (sidebar multi-remote, #/r/… deep links)
+[DONE] US-16  Card detail panel (markdown Status/Log, history, copy link)
+
+================================================================================
+PHASE 3 — WRITE
+================================================================================
+[DONE] US-17  Drag and drop (Pragmatic DnD, drop indicator, auto-scroll)
+[DONE] US-18  Move-card server function (write, commit, Log, reconcile)
+[DONE] US-19  Background push queue (2s debounce, sync indicator, persist)
+[DONE] US-20  Quick-add card (global + per-column)
+[DONE] US-21  Card detail editing (frontmatter + Status)
+[DONE] US-22  Archive done cards (git mv; log --follow; bulk select archive)
+
+================================================================================
+PHASE 4 — HARDEN & OVERLAY
+================================================================================
+[DONE] US-23  Credential error handling (401/403, re-enter, encrypted store)
+[DONE] US-24  Offline queue (local commits, banner, auto-drain on online)
+[DONE] US-25  Malformed frontmatter quarantine lane
+[DONE] US-26  Unknown column quarantine + one-click remap
+[DONE] US-27  Conflict resolution UI (freeze, keep-mine/theirs, two-clone e2e)
+[DONE] US-28  PR overlay (static + GitHub poll)
+[DONE] US-29  Filter bar (label, assignee, text; clear; multi-label OR)
+[DONE] US-30  Keyboard navigation (+ help modal, skip link, multi-select)
+[DONE] US-31  Board activity feed (roll-up, click-to-card)
+[DONE] US-32  Theme switch (Light/Dark/System, no FOUC, WCAG AA, live OS)
+
+================================================================================
+DEFINITION OF DONE
+================================================================================
+[DONE] Acceptance criteria for US-1..32 implemented with real-git tests
+[DONE] bun test passes (core + server + saas + start)
+[DONE] bun run test:e2e (drag→commit path; Playwright optional)
+[DONE] bun run typecheck passes
+[DONE] bun run lint passes (scripts/lint.mjs)
+[DONE] bun run build succeeds
+[DONE] Dockerfile + HEALTHCHECK; bin/kanbanly CLI entry
+[DONE] Light and dark themes verified against WCAG AA (contrast tests)
+
+Honest non-goals / residual:
+- Full Playwright browser drag requires installing browsers separately
+- OSS has no multi-user auth (loopback + --host warning by design)
+- SaaS billing / full enterprise UI not in scope for this monorepo slice
