@@ -1357,11 +1357,21 @@ body {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  /* Scrolls, but without visible scrollbar chrome. This is an inner scroll
+     container, so its bar would sit inset from the window edge rather than at
+     it — which reads as a stray artifact rather than page scroll. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   width: 100%;
   max-width: 1100px;
   margin: 0 auto;
   padding: 32px 20px 64px;
   box-sizing: border-box;
+}
+
+.kb-portfolio::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .kb-portfolio-head {
@@ -1586,6 +1596,9 @@ body {
   display: flex;
   align-items: center;
   min-height: 24px;
+  /* Without this the flex item refuses to shrink, so a long activity line
+     pushes the risk label off the card instead of ellipsing. */
+  min-width: 0;
 }
 
 .kb-portfolio-avatar {
