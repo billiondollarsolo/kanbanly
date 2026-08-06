@@ -398,6 +398,24 @@ export function createHandler(options: AppOptions = {}) {
     }
   }
 
+  /**
+   * Point `connected` (and its credential store) at a registry entry.
+   *
+   * registry.add() marks whatever it just added as active, so anything that
+   * registers an entry must reconcile `connected` too — otherwise the app
+   * reports one remote's identity while serving another's data, which is
+   * exactly what made Settings list every board while the landing page showed
+   * the boot repo's three.
+   */
+  function adoptActiveEntry(entry: { slug: string; connected: ConnectedRepo }): void {
+    connected = entry.connected;
+    credentials = new CredentialStore(defaultCredentialPath(entry.connected.path));
+    if (credentials.has()) {
+      entry.connected.storage.setCredential(credentials.get());
+    }
+    applyResolvedCredential(entry.slug);
+  }
+
   function attachConnected(next: ConnectedRepo, preferredSlug?: string) {
     const entry = registry.add(next, preferredSlug);
     connected = entry.connected;
@@ -468,6 +486,10 @@ export function createHandler(options: AppOptions = {}) {
   }> {
     const restored: string[] = [];
     const skipped: string[] = [];
+    // registry.add() marks each addition active, so remember what was active
+    // before and restore it afterwards. Re-attaching remotes must not silently
+    // change which board set the app is serving.
+    const activeBefore = registry.active()?.slug ?? null;
     let saved: ReturnType<typeof workspace.get>;
     try {
       saved = workspace.get();
@@ -508,6 +530,10 @@ export function createHandler(options: AppOptions = {}) {
       } catch (e) {
         skipped.push(`${conn.id} (${e instanceof Error ? e.message : String(e)})`);
       }
+    }
+    if (activeBefore && registry.setActive(activeBefore)) {
+      const entry = registry.active();
+      if (entry) adoptActiveEntry(entry);
     }
     return { restored, skipped };
   }
@@ -581,12 +607,7 @@ export function createHandler(options: AppOptions = {}) {
         return json({ error: "unknown remote slug" }, 404);
       }
       const entry = registry.active()!;
-      connected = entry.connected;
-      credentials = new CredentialStore(defaultCredentialPath(entry.connected.path));
-      if (credentials.has()) {
-        entry.connected.storage.setCredential(credentials.get());
-      }
-      applyResolvedCredential(entry.slug);
+      adoptActiveEntry(entry);
       live?.setConnected(entry.connected);
       if (enablePushQueue) {
         pushQueue?.stop();
